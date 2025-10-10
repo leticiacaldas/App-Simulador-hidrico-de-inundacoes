@@ -1,9 +1,0 @@
-[tool.pyright]
-venvPath = "."
-venv = ".venv"
-include = ["."]
-reportMissingImports = true
-reportMissingTypeStubs = false
-extraPaths = ["./shapes"]
-typeCheckingMode = "basic"
-exclude = ["**/__pycache__", "**/.pytest_cache", "**/venv", "**/.venv"]e
