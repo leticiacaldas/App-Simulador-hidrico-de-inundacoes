@@ -35,3 +35,16 @@ simulações/
 # SO
 .DS_Store
 Thumbs.db
+
+# Arquivos grandes/arquivos compactados (evitar versionar)
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
+*.tgz
+shapes/shapes.zip
+
+# Logs e PIDs locais
+*.log
+.streamlit_pid
