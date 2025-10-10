@@ -1,0 +1,162 @@
+<?xml version='1.0' encoding='utf-8'?>
+<lisflood>
+	<lfuser>
+		<textvar name="ProjectDir" value="/input" />
+		<textvar name="ProjectPath" value="/input" />
+		<textvar name="SettingsDir" value="/input" />
+		<textvar name="SettingsPath" value="/input" />
+		<textvar name="ReportSteps" value="starttime+3600..endtime" />
+		<textvar name="FilterSteps" value="endtime" />
+		<textvar name="CalendarConvention" value="proleptic_gregorian" />
+		<textvar name="CalendarDayStart" value="01/01/1970 00:00" />
+		<textvar name="PathOut" value="/input/output" />
+	</lfuser>
+	<lfbinding>
+		<textvar name="OFOtherInitValue" value="0" />
+		<textvar name="OFForestInitValue" value="0" />
+		<textvar name="OFDirectInitValue" value="0" />
+		<textvar name="Grad" value="0.0001" />
+		<textvar name="GradMin" value="0.0001" />
+		<textvar name="OFDepRef" value="0.001" />
+		<textvar name="DtSecChannel" value="0" />
+		<textvar name="GwLoss" value="0" />
+		<textvar name="GwPercValue" value="0" />
+		<textvar name="PrScaling" value="1" />
+		<textvar name="CalEvaporation" value="0" />
+		<textvar name="ElevationStD" value="0" />
+		<textvar name="TemperatureLapseRate" value="0" />
+		<textvar name="SnowSeasonAdj" value="0" />
+		<textvar name="TempSnow" value="0" />
+		<textvar name="SnowFactor" value="0" />
+		<textvar name="SnowMeltCoef" value="0" />
+		<textvar name="TempMelt" value="0" />
+		<textvar name="SnowCoverAInitValue" value="0" />
+		<textvar name="SnowCoverBInitValue" value="0" />
+		<textvar name="SnowCoverCInitValue" value="0" />
+		<textvar name="UpperZoneTimeConstant" value="0" />
+		<textvar name="LowerZoneTimeConstant" value="0" />
+		<textvar name="LZInitValue" value="0" />
+		<textvar name="LZThreshold" value="0" />
+		<textvar name="UZInitValue" value="0" />
+		<textvar name="UZForestInitValue" value="0" />
+		<textvar name="UZIrrigationInitValue" value="0" />
+		<textvar name="CourantCrit" value="0" />
+		<textvar name="LeafDrainageTimeConstant" value="0" />
+		<textvar name="AvWaterRateThreshold" value="0" />
+		<textvar name="b_Xinanjiang" value="0" />
+		<textvar name="PowerPrefFlow" value="0" />
+		<textvar name="DSLRInitValue" value="0" />
+		<textvar name="DSLRForestInitValue" value="0" />
+		<textvar name="DSLRIrrigationInitValue" value="0" />
+		<textvar name="CumIntInitValue" value="0" />
+		<textvar name="CumIntForestInitValue" value="0" />
+		<textvar name="CumIntIrrigationInitValue" value="0" />
+		<textvar name="CumIntSealedInitValue" value="0" />
+		<textvar name="SMaxSealed" value="0" />
+		<textvar name="dem" value="/input/DEM.tif" />
+		<textvar name="MaskMap" value="/input/MASK.map" />
+		<textvar name="CalendarConvention" value="proleptic_gregorian" />
+		<textvar name="CalendarDayStart" value="01/01/1970 00:00" />
+		<textvar name="StepStart" value="01/05/2024 00:00" />
+		<textvar name="StepEnd" value="05/06/2024 00:00" />
+		<textvar name="timestepInit" value="3600" />
+		<textvar name="DtSec" value="3600" />
+		<textvar name="numCPUs_parallelNumba" value="1" />
+		<textvar name="Ldd" value="/input/Ldd.map" />
+		<textvar name="MapsCaching" value="False" />
+		<textvar name="LAIOtherMaps" value="0" />
+		<textvar name="LAIForestMaps" value="0" />
+		<textvar name="LAIIrrigationMaps" value="0" />
+		<textvar name="kdf" value="0.75" />
+		<textvar name="OtherFraction" value="1" />
+		<textvar name="ForestFraction" value="0" />
+		<textvar name="DirectRunoffFraction" value="0" />
+		<textvar name="WaterFraction" value="0" />
+		<textvar name="IrrigationFraction" value="0" />
+		<textvar name="RiceFraction" value="0" />
+		<textvar name="netCDFtemplate" value="/input/template_xy.nc" />
+		<textvar name="proj4_params" value="+proj=utm +zone=22 +south +ellps=GRS80 +units=m +no_defs" />
+		<textvar name="proj4" value="+proj=utm +zone=22 +south +ellps=GRS80 +units=m +no_defs" />
+		<textvar name="LakeMask" value="0" />
+		<textvar name="maxNoEva" value="0" />
+		<textvar name="Afrost" value="0" />
+		<textvar name="FrostIndexInitValue" value="0" />
+		<textvar name="FrostIndexThreshold" value="0" />
+		<textvar name="Kfrost" value="0" />
+		<textvar name="SnowWaterEquivalent" value="0" />
+		<textvar name="CalChanMan" value="0" />
+		<textvar name="ChanBottomWidth" value="0" />
+		<textvar name="ChanDepthThreshold" value="0" />
+		<textvar name="ChanGrad" value="0" />
+		<textvar name="ChanGradMin" value="0" />
+		<textvar name="ChanLength" value="0" />
+		<textvar name="ChanMan" value="0" />
+		<textvar name="ChanSdXdY" value="0" />
+		<textvar name="Channels" value="0" />
+		<textvar name="PrevDischarge" value="0" />
+		<textvar name="TotalCrossSectionAreaInitValue" value="0" />
+		<textvar name="beta" value="0" />
+		<textvar name="MapCropCoef" value="0" />
+		<textvar name="MapCropGroupNumber" value="0" />
+		<textvar name="MapForestCropCoef" value="0" />
+		<textvar name="MapForestCropGroupNumber" value="0" />
+		<textvar name="MapForestN" value="0" />
+		<textvar name="MapGenuAlpha1" value="0" />
+		<textvar name="MapGenuAlpha1Forest" value="0" />
+		<textvar name="MapGenuAlpha2" value="0" />
+		<textvar name="MapGenuAlpha2Forest" value="0" />
+		<textvar name="MapGenuAlpha3" value="0" />
+		<textvar name="MapIrrigationCropCoef" value="0" />
+		<textvar name="MapIrrigationCropGroupNumber" value="0" />
+		<textvar name="MapKSat1" value="0" />
+		<textvar name="MapKSat1Forest" value="0" />
+		<textvar name="MapKSat2" value="0" />
+		<textvar name="MapKSat2Forest" value="0" />
+		<textvar name="MapKSat3" value="0" />
+		<textvar name="MapLambda1" value="0" />
+		<textvar name="MapLambda1Forest" value="0" />
+		<textvar name="MapLambda2" value="0" />
+		<textvar name="MapLambda2Forest" value="0" />
+		<textvar name="MapLambda3" value="0" />
+		<textvar name="MapN" value="0" />
+		<textvar name="MapThetaRes1" value="0" />
+		<textvar name="MapThetaRes1Forest" value="0" />
+		<textvar name="MapThetaRes2" value="0" />
+		<textvar name="MapThetaRes2Forest" value="0" />
+		<textvar name="MapThetaRes3" value="0" />
+		<textvar name="MapThetaSat1" value="0" />
+		<textvar name="MapThetaSat1Forest" value="0" />
+		<textvar name="MapThetaSat2" value="0" />
+		<textvar name="MapThetaSat2Forest" value="0" />
+		<textvar name="MapThetaSat3" value="0" />
+		<textvar name="SoilDepth1" value="0" />
+		<textvar name="SoilDepth1Forest" value="0" />
+		<textvar name="SoilDepth2" value="0" />
+		<textvar name="SoilDepth2Forest" value="0" />
+		<textvar name="SoilDepth3" value="0" />
+		<textvar name="SoilDepth3Forest" value="0" />
+		<textvar name="ThetaForestInit1Value" value="0" />
+		<textvar name="ThetaForestInit2Value" value="0" />
+		<textvar name="ThetaForestInit3Value" value="0" />
+		<textvar name="ThetaInit1Value" value="0" />
+		<textvar name="ThetaInit2Value" value="0" />
+		<textvar name="ThetaInit3Value" value="0" />
+		<textvar name="ThetaIrrigationInit1Value" value="0" />
+		<textvar name="ThetaIrrigationInit2Value" value="0" />
+		<textvar name="ThetaIrrigationInit3Value" value="0" />
+	</lfbinding>
+	<lfoptions>
+		<textvar name="SaveAsciiGrids" value="0" />
+		<textvar name="Verbose" value="1" />
+		<textvar name="UseRouting" value="0" />
+		<textvar name="UseSoil" value="0" />
+		<textvar name="UseSnow" value="0" />
+		<textvar name="UseGroundWater" value="0" />
+		<textvar name="UseEvapoWater" value="0" />
+		<textvar name="UseLeafArea" value="0" />
+		<textvar name="UseLandUseChange" value="0" />
+		<textvar name="UseLake" value="0" />
+		<textvar name="UseIrrigation" value="0" />
+		<textvar name="UseWaterDemand" value="0" />
+	</lfoptions>
+</lisflood>

@@ -1,0 +1,37 @@
+# Python / Virtualenv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+
+# VS Code settings (opcional manter). Remova estas linhas se quiser versionar .vscode
+# .vscode/
+
+# Dados geoespaciais pesados (não versionar por padrão)
+*.tif
+*.tiff
+*.tfw
+*.ovr
+*.aux.xml
+*.asc
+*.gpkg
+*.shp
+*.shx
+*.dbf
+*.prj
+*.map
+*.stl
+
+# Saídas e pastas de trabalho
+simulações/
+**/output/
+**/outputs/
+**/tmp/
+**/temp/
+
+# SO
+.DS_Store
+Thumbs.db

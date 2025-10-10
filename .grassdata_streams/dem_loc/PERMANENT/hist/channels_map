@@ -1,0 +1,9 @@
+Tue Oct  7 10:17:14 2025
+channels_map
+PERMANENT
+leticia
+raster
+
+
+gerado por r.mapcalc
+if((stream_acc > 0 && stream_acc < 65535), 1, 0)

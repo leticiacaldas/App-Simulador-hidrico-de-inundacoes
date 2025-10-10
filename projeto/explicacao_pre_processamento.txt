@@ -1,0 +1,49 @@
+Explicação dos códigos do pré-processamento para GAMA
+=====================================================
+
+Este documento descreve as principais funções e etapas do pipeline de pré-processamento de dados para integração com o simulador GAMA, desenvolvido em Python.
+
+1. calcular_declividade(dem_path)
+----------------------------------
+Calcula a declividade (inclinação) do terreno a partir do Modelo Digital de Elevação (DEM). Utiliza derivadas espaciais para obter o gradiente e salva o resultado em um novo raster.
+
+2. calcular_direcao_fluxo(dem_path)
+------------------------------------
+Gera um raster de direção de fluxo a partir do DEM. (No código atual, apenas replica o DEM, mas pode ser expandido para calcular a direção real de fluxo.)
+
+3. processar_terraceamento(terraceamento_path)
+-----------------------------------------------
+Processa o raster de terraceamento, salvando uma cópia processada para uso posterior.
+
+4. processar_penetrometro(penetrometro_path, dem_path)
+------------------------------------------------------
+- Lê os dados do penetrômetro (profundidade do solo) de um CSV.
+- Converte os pontos em shapefile.
+- Interpola espacialmente os valores de profundidade do solo para toda a grade do DEM, gerando um raster de profundidade do solo.
+
+5. gerar_arquivos_gama(...)
+---------------------------
+- Lê todos os rasters processados (elevação, declividade, direção de fluxo, terraceamento, profundidade do solo).
+- Para cada célula da grade, extrai os valores e monta um CSV final ('celulas_terreno.csv') com todas as variáveis necessárias para o GAMA.
+
+6. processar_dados_entrada()
+----------------------------
+Função principal que orquestra todo o pipeline:
+- Calcula declividade e direção de fluxo
+- Processa terraceamento
+- Interpola dados do penetrômetro
+- Gera o CSV final para o GAMA
+
+Dependências principais:
+-----------------------
+- pandas, numpy: manipulação de dados
+- rasterio: leitura e escrita de rasters
+- geopandas: manipulação de dados espaciais vetoriais
+- scipy.interpolate.griddata: interpolação espacial
+
+Resumo do fluxo:
+----------------
+1. Entrada: DEM, terraceamento, penetrômetro (CSV)
+2. Saída: rasters processados e CSV 'celulas_terreno.csv' pronto para o GAMA
+
+Dúvidas ou sugestões, só avisar!

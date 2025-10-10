@@ -1,0 +1,4 @@
+file: /home/leticia/Desktop/projeto_rs/DEM_AOI_50CM.tif
+band: 1
+null: -9999
+type: 6
