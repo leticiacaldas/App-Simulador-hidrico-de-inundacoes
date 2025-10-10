@@ -48,3 +48,14 @@ shapes/shapes.zip
 # Logs e PIDs locais
 *.log
 .streamlit_pid
+
+# Pastas grandes/sem uso no repositório
+DEM AOI ORIGINAL/
+DEM 1m/
+DEM AOI PIXELS/
+dom/
+area de estudos/
+channels/
+logos/
+.grassdata_streams/
+.lisf_*/
