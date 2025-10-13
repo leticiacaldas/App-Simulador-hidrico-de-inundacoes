@@ -48,6 +48,19 @@ Caso prefira fazer manualmente:
    - Requirements: será lido de `requirements.txt`
 1. Lance o app e acompanhe os logs
 
+### Versão leve (somente NumPy)
+
+Se quiser uma versão muito mais leve (sem dependências geoespaciais), use o app `app_numpy_streamlit.py` com `requirements-minimal.txt`:
+
+```bash
+# Rodar localmente a versão leve
+python -m streamlit run app_numpy_streamlit.py
+```
+
+Deploy 1‑clique para a versão leve:
+
+[Deploy leve no Streamlit Cloud](https://share.streamlit.io/deploy?repository=leticiacaldas/App-Simulador-hidrico-de-inundacoes&branch=main&mainModule=app_numpy_streamlit.py)
+
 ## Publicar no GitHub
 
 1. Inicialize o repositório e primeiro commit:

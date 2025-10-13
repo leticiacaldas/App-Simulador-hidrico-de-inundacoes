@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false, reportAttributeAccessIssue=false, reportOperatorIssue=false
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
@@ -156,7 +157,7 @@ if preview_button:
                         dem_data = src.read(1, out_shape=(nova_altura, novo_comprimento), resampling=Resampling.average)
                         left, top = transform_reduzida * (0, 0)
                         right, bottom = transform_reduzida * (novo_comprimento, nova_altura)
-                        extent = [left, right, bottom, top]
+                        extent = (float(left), float(right), float(bottom), float(top))
 
                     with rio.Env(SHAPE_RESTORE_SHX='YES'):
                         fontes_gdf = gpd.read_file(shp_path)
