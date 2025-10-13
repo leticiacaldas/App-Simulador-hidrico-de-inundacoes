@@ -176,12 +176,19 @@ def _setup_geodata(dem_path, vector_path: Optional[str], grid_reduction_factor, 
         )
         # Tamanho da célula
         if dem_crs and dem_crs.is_geographic:
-            st.warning(f"CRS geográfico detectado ({dem_crs.to_string()}). Considere usar CRS projetado (ex.: UTM).")
-            # Aproximação: 1 grau ~ 111.320m
-            cell_size_m = abs(dem_src.res[0]) * grid_reduction_factor * 111_320
+            st.warning(f"CRS geográfico detectado ({dem_crs.to_string()}). Converta para UTM para resultados precisos.")
+            # Cálculo mais realista considerando latitude do centro do DEM
+            bounds = dem_src.bounds
+            center_lat = (bounds.top + bounds.bottom) / 2.0
+            meters_per_degree_lat = 111_320
+            meters_per_degree_lon = 111_320 * np.cos(np.radians(center_lat))
+            cell_width_m = abs(dem_src.res[0]) * meters_per_degree_lon * grid_reduction_factor
+            cell_height_m = abs(dem_src.res[1]) * meters_per_degree_lat * grid_reduction_factor
+            cell_size_m = (cell_width_m + cell_height_m) / 2.0
         else:
+            # CRS projetado (e.g., UTM): resolução já em metros
             cell_size_m = abs(dem_src.res[0]) * grid_reduction_factor
-            st.info(f"CRS do DEM: {dem_crs}. Tamanho da célula: {cell_size_m:.2f} m")
+        st.info(f"CRS do DEM: {dem_crs}. Tamanho de célula efetivo: {cell_size_m:.3f} m")
     if vector_path is None:
         st.info("Sem vetor de fontes enviado. Usando a área inteira como fonte de chuva.")
         sources_mask = np.ones(dem_data.shape, dtype=np.uint8)
@@ -332,58 +339,93 @@ def _install_trimesh() -> Tuple[int, str, str]:
         return 1, "", str(e)
 
 def create_lisflood_minimal_xml(output_path, replacements):
-    """Cria um XML mínimo compatível com LISFLOOD"""
-    xml_template = '''<?xml version="1.0" encoding="UTF-8"?>
-<lisfloodSettings>
-    <lfuser>
-        <textvar name="MaskMap" value="/input/MASK.map"/>
-        <textvar name="Ldd" value="/input/Ldd.map"/>
-        <textvar name="PathOut" value="/input/output/"/>
-        <textvar name="StepStart" value="01/01/2024 00:00"/>
-        <textvar name="StepEnd" value="01/01/2024 01:00"/>
-        <textvar name="DtSec" value="3600"/>
-        <textvar name="RepStep" value="1"/>
-        <textvar name="CalendarConvention" value="proleptic_gregorian"/>
-       
-        <!-- Desativar todos os módulos -->
-        <textvar name="simulateWaterBodies" value="0"/>
-        <textvar name="simulateLakes" value="0"/>
-        <textvar name="simulateReservoirs" value="0"/>
-        <textvar name="simulateSnow" value="0"/>
-        <textvar name="simulateGlaciers" value="0"/>
-        <textvar name="simulateFrost" value="0"/>
-        <textvar name="simulateInfiltration" value="0"/>
-        <textvar name="simulatePercolation" value="0"/>
-        <textvar name="simulateGroundwater" value="0"/>
-        <textvar name="simulateCapillaryRise" value="0"/>
-        <textvar name="simulateInterception" value="0"/>
-        <textvar name="simulateEvapotranspiration" value="0"/>
-        <textvar name="simulateWaterQuality" value="0"/>
-        <textvar name="simulateSediment" value="0"/>
-        <textvar name="simulateNutrients" value="0"/>
-       
-        <!-- Configurações básicas de output -->
-        <textvar name="RepMapSteps" value="1"/>
-        <textvar name="RepStateFiles" value="0"/>
-        <textvar name="RepDischarge" value="0"/>
-        <textvar name="RepStateVars" value="0"/>
-       
-        <!-- Configurações de inicialização -->
-        <textvar name="InitialConditions" value="0"/>
-        <textvar name="InitLisflood" value="1"/>
-    </lfuser>
-   
-    <lfbinding>
-        <map name="MASK" file="MASK.map"/>
-        <map name="LDD" file="Ldd.map"/>
-    </lfbinding>
-</lisfloodSettings>'''
-   
-    for key, value in replacements.items():
-        xml_template = xml_template.replace(f'value="{key}"', f'value="{value}"')
-   
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write(xml_template)
+    """Cria um XML mínimo compatível com LISFLOOD - VERSÃO ROBUSTA"""
+    import xml.etree.ElementTree as ET
+
+    # Valores padrão COMPLETOS
+    default_replacements = {
+        "MaskMap": "/input/MASK.map",
+        "Ldd": "/input/Ldd.map",
+        "PathOut": "/input/output/",
+        "StepStart": "01/01/2024 00:00",
+        "StepEnd": "01/01/2024 01:00",
+        "DtSec": "3600",
+        "DtInit": "3600",
+        "RepStep": "1",
+        "CalendarConvention": "proleptic_gregorian",
+    }
+
+    # Atualiza com os valores fornecidos
+    default_replacements.update(replacements or {})
+
+    # Construção XML
+    root = ET.Element("lisfloodSettings")
+    lfuser = ET.SubElement(root, "lfuser")
+
+    params = [
+        ("MaskMap", default_replacements["MaskMap"]),
+        ("Ldd", default_replacements["Ldd"]),
+        ("PathOut", default_replacements["PathOut"]),
+        ("StepStart", default_replacements["StepStart"]),
+        ("StepEnd", default_replacements["StepEnd"]),
+        ("DtSec", default_replacements["DtSec"]),
+        ("DtInit", default_replacements["DtInit"]),
+        # Sinônimos para compatibilidade
+        ("timestep", default_replacements["DtSec"]),
+        ("timestep_init", default_replacements["DtInit"]),
+        ("CalendarType", default_replacements["CalendarConvention"]),
+        ("RepStep", default_replacements["RepStep"]),
+        ("CalendarConvention", default_replacements["CalendarConvention"]),
+        ("simulateWaterBodies", "0"),
+        ("simulateLakes", "0"),
+        ("simulateReservoirs", "0"),
+        ("simulateSnow", "0"),
+        ("simulateGlaciers", "0"),
+        ("simulateFrost", "0"),
+        ("simulateInfiltration", "0"),
+        ("simulatePercolation", "0"),
+        ("simulateGroundwater", "0"),
+        ("simulateCapillaryRise", "0"),
+        ("simulateInterception", "0"),
+        ("simulateEvapotranspiration", "0"),
+        ("simulateWaterQuality", "0"),
+        ("simulateSediment", "0"),
+        ("simulateNutrients", "0"),
+        ("RepMapSteps", "1"),
+        ("RepStateFiles", "0"),
+        ("RepDischarge", "0"),
+        ("RepStateVars", "0"),
+        ("InitialConditions", "0"),
+        ("InitLisflood", "1"),
+    ]
+    for name, value in params:
+        ET.SubElement(lfuser, "textvar", name=name, value=value)
+
+    lfbinding = ET.SubElement(root, "lfbinding")
+    # Essenciais no binding (incluir variações)
+    ET.SubElement(lfbinding, "textvar", name="CalendarConvention", value=default_replacements["CalendarConvention"])
+    ET.SubElement(lfbinding, "textvar", name="CalendarType", value=default_replacements["CalendarConvention"])  # alias
+    # Algumas versões usam tag <text> em vez de <textvar>
+    ET.SubElement(lfbinding, "text", name="CalendarConvention", value=default_replacements["CalendarConvention"])
+    ET.SubElement(lfbinding, "text", name="CalendarType", value=default_replacements["CalendarConvention"])  # alias
+    ET.SubElement(lfbinding, "map", name="MASK", file="MASK.map")
+    ET.SubElement(lfbinding, "map", name="LDD", file="Ldd.map")
+
+    # Formatar e gravar
+    try:
+        ET.indent(root, space="\t", level=0)  # py>=3.9
+    except Exception:
+        pass
+    tree = ET.ElementTree(root)
+    tree.write(output_path, encoding="utf-8", xml_declaration=True)
+
+    # Verificação básica
+    try:
+        _ = ET.parse(output_path)
+        print(f"✅ XML válido criado em: {output_path}")
+    except ET.ParseError as e:
+        print(f"❌ Erro no XML gerado: {e}")
+        raise
 
 # ========= FUNÇÕES AUXILIARES PARA PÓS-PROCESSAMENTO =========
 def _create_evolution_plots(model):
@@ -1175,6 +1217,9 @@ def main():
                                 "StepStart": step_start,
                                 "StepEnd": step_end,
                                 "DtSec": str(timestep),
+                                "DtInit": str(timestep),  # ADICIONADO
+                                "RepStep": "1",           # ADICIONADO
+                                "CalendarConvention": "proleptic_gregorian",
                             }
                            
                             if use_minimal_template or not template_xml:
@@ -1189,6 +1234,31 @@ def main():
                                 else:
                                     st.warning("Falha ao salvar template. Usando template mínimo.")
                                     create_lisflood_minimal_xml(xml_path, replacements)
+
+                            # Verificar se o XML foi criado corretamente
+                            if os.path.exists(xml_path):
+                                st.success(f"✅ Arquivo de configuração criado: {xml_path}")
+                                # Verificação crítica: tags essenciais e elemento lfuser
+                                try:
+                                    import xml.etree.ElementTree as ET
+                                    tree = ET.parse(xml_path)
+                                    root = tree.getroot()
+                                    lfuser_el = root.find('lfuser')
+                                    with open(xml_path, 'r', encoding='utf-8') as f:
+                                        xml_content = f.read()
+                                    missing = [tag for tag in ['<lfuser>', '<lfbinding>', 'DtInit', 'CalendarConvention'] if tag not in xml_content]
+                                    if lfuser_el is None or missing:
+                                        st.error(f"❌ XML incompleto. Faltando: {missing or ['lfuser']} ")
+                                        st.code(xml_content, language='xml')
+                                        st.stop()
+                                    if st.checkbox("Mostrar conteúdo do XML (debug)"):
+                                        st.code(xml_content, language='xml')
+                                except Exception as e:
+                                    st.error(f"❌ Erro ao verificar XML: {e}")
+                                    st.stop()
+                            else:
+                                st.error("❌ Falha ao criar arquivo de configuração XML")
+                                st.stop()
 
                         # Telemetria: início da execução LISFLOOD
                         _telemetry_on = bool(st.session_state.get("telemetry_enabled", False) and (opik is not None))

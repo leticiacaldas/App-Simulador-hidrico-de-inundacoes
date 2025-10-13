@@ -1,5 +1,14 @@
+# Preferir wheels binários no Streamlit Cloud
+--only-binary=:all:
+--prefer-binary
+
+# Ferramentas de build/resolução atualizadas (ajuda o pip a escolher wheels corretos)
+pip>=24.2
+setuptools>=69.5.1
+wheel>=0.43.0
+
 streamlit==1.36.0
-numpy==1.26.*
+numpy==1.26.4
 pandas==2.2.2
 matplotlib==3.8.4
 pillow==10.3.0
@@ -9,7 +18,7 @@ contextily==1.5.2
 # Geo stack - versões com wheels manylinux
 shapely==2.0.4
 pyproj==3.6.1
-fiona==1.9.*
+fiona==1.9.6
 rasterio==1.3.9
 geopandas==0.14.4
 plotly==5.22.0

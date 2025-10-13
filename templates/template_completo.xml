@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lisfloodSettings>
+    <lfuser>
+        <!-- Mapas obrigatórios -->
+        <textvar name="MaskMap" value="/input/MASK.map"/>
+        <textvar name="Ldd" value="/input/Ldd.map"/>
+        <textvar name="PathOut" value="/input/out/"/>
+
+        <!-- Configurações de tempo -->
+        <textvar name="StepStart" value="01/01/2010 00:00"/>
+        <textvar name="StepEnd" value="01/01/2010 00:30"/>
+        <textvar name="DtSec" value="1800"/>
+        <textvar name="DtInit" value="1800"/>
+        <textvar name="RepStep" value="1"/>
+        <textvar name="CalendarType" value="proleptic_gregorian"/>
+
+        <!-- Mapas de entrada (CRÍTICOS - mesmo que não usemos) -->
+        <textvar name="PrecipitationMaps" value="/input/pr"/>
+        <textvar name="TemperatureMaps" value="/input/tavg"/>
+        <textvar name="ETMaps" value="/input/et"/>
+
+        <!-- Desativar TODOS os módulos -->
+        <textvar name="simulateWaterBodies" value="0"/>
+        <textvar name="simulateLakes" value="0"/>
+        <textvar name="simulateReservoirs" value="0"/>
+        <textvar name="simulateSnow" value="0"/>
+        <textvar name="simulateGlaciers" value="0"/>
+        <textvar name="simulateFrost" value="0"/>
+        <textvar name="simulateInfiltration" value="0"/>
+        <textvar name="simulatePercolation" value="0"/>
+        <textvar name="simulateGroundwater" value="0"/>
+        <textvar name="simulateCapillaryRise" value="0"/>
+        <textvar name="simulateInterception" value="0"/>
+        <textvar name="simulateEvapotranspiration" value="0"/>
+        <textvar name="simulateWaterQuality" value="0"/>
+        <textvar name="simulateSediment" value="0"/>
+        <textvar name="simulateNutrients" value="0"/>
+
+        <!-- Configurações de output -->
+        <textvar name="RepMapSteps" value="1"/>
+        <textvar name="RepStateFiles" value="0"/>
+        <textvar name="RepDischarge" value="0"/>
+        <textvar name="RepStateVars" value="0"/>
+
+        <!-- Inicialização -->
+        <textvar name="InitialConditions" value="0"/>
+        <textvar name="InitLisflood" value="1"/>
+    </lfuser>
+
+    <lfbinding>
+        <!-- Mapas obrigatórios -->
+        <map name="MASK" file="MASK.map"/>
+        <map name="LDD" file="Ldd.map"/>
+
+        <!-- Mapas climáticos (CRÍTICOS - mesmo que vazios) -->
+        <map name="Precipitation" file="pr"/>
+        <map name="Temperature" file="tavg"/>
+        <map name="ET" file="et"/>
+
+        <!-- Configurações -->
+        <text name="CalendarType" value="proleptic_gregorian"/>
+    </lfbinding>
+</lisfloodSettings>

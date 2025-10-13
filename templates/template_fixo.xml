@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lisfloodSettings>
+    <lfuser>
+        <textvar name="MaskMap" value="/input/MASK.map"/>
+        <textvar name="Ldd" value="/input/Ldd.map"/>
+        <textvar name="PathOut" value="/input/output/"/>
+        <textvar name="StepStart" value="01/01/2024 00:00"/>
+        <textvar name="StepEnd" value="01/01/2024 01:00"/>
+        <textvar name="DtSec" value="3600"/>
+        <textvar name="DtInit" value="3600"/>
+        <textvar name="RepStep" value="1"/>
+        <textvar name="CalendarConvention" value="proleptic_gregorian"/>
+    </lfuser>
+    <lfbinding>
+        <map name="MASK" file="MASK.map"/>
+        <map name="LDD" file="Ldd.map"/>
+    </lfbinding>
+</lisfloodSettings>

@@ -130,7 +130,9 @@ def patch_settings_xml(template_xml: str, out_xml: str, replacements: Dict[str, 
     # Garantir bindings essenciais
     essential_bindings = {
         "MaskMap": "/input/MASK.map",
-        "Ldd": "/input/Ldd.map"
+        "Ldd": "/input/Ldd.map",
+        # Alguns templates e versões do LISFLOOD esperam CalendarConvention também em lfbinding
+        "CalendarConvention": "proleptic_gregorian"
     }
     
     for key, default_value in essential_bindings.items():
@@ -210,6 +212,21 @@ def run_lisflood_docker(input_folder: str, xml_filename: str,
     else:
         res = subprocess.run(cmd, capture_output=True, text=True, check=False)
         return res.returncode, res.stdout, res.stderr
+
+
+def run_lisflood_official(input_folder: str, xml_filename: str,
+                          extra_args: Optional[List[str]] = None) -> Tuple[int, str, str]:
+    """Executa o container oficial do LISFLOOD (efas/lisflood)."""
+    cmd = [
+        "docker", "run", "--rm",
+        "-v", f"{input_folder}:/input",
+        "efas/lisflood:latest",
+        f"/input/{xml_filename}",
+    ]
+    if extra_args:
+        cmd.extend(extra_args)
+    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    return res.returncode, res.stdout, res.stderr
 
 
 def list_outputs(output_folder: str) -> List[str]:
