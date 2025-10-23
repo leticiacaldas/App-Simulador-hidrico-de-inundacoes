@@ -1,221 +1,271 @@
-from lisflood_integration import (
-    prepare_input_folder as lf_prepare_input_folder,
-    copy_rasters as lf_copy_rasters,
-    ensure_mask_pcraster as lf_ensure_mask_pcraster,
-    generate_ldd_from_dem as lf_generate_ldd_from_dem,
-    run_lisflood_docker as lf_run_lisflood,
-    list_outputs as lf_list_outputs,
-    convert_stl_to_dsm as lf_convert_stl_to_dsm,
-    patch_settings_xml_with_defaults as lf_patch_settings_xml_with_defaults,
-)
 from shapes import apply_custom_styles, create_header
+
+# Imports padrão e bibliotecas utilizadas no app
+import os
+import io
+import sys
+import time
+import shutil
+import tempfile
+import subprocess
+import contextlib
+from typing import Optional, Tuple, Any, Dict, cast
+
 import streamlit as st
 import numpy as np
 import pandas as pd
-import geopandas as gpd
-import rasterio as rio
-from rasterio.enums import Resampling
-from rasterio.io import MemoryFile
-from rasterio.transform import from_origin, array_bounds
-from rasterio.features import rasterize
-import contextily as ctx
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
-from matplotlib.colors import LightSource
 import matplotlib.colors as mcolors
+from matplotlib.animation import FuncAnimation
+import rasterio as rio
+from rasterio.io import MemoryFile
+from rasterio.enums import Resampling
+from rasterio.transform import array_bounds, from_origin
+from rasterio.features import rasterize
+import geopandas as gpd
+import contextily as ctx
+from scipy import ndimage
+from matplotlib.patches import Patch
+from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+from PIL import Image
+from sklearn.cluster import DBSCAN
+import json
+
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
-    roc_curve,
     roc_auc_score,
     precision_recall_curve,
     average_precision_score,
+    roc_curve,
 )
-import os
-import contextlib
-import tempfile
-import shutil
-import io
-from typing import Optional, Tuple, Dict, Any
-import time
-import subprocess
-import sys
-import importlib as importlib_mod
 
-# Telemetria (Opik) - import opcional
+# Opik (telemetria) é opcional
 try:
-    opik = importlib_mod.import_module("opik")  # type: ignore
+    import opik  # type: ignore
 except Exception:
     opik = None  # type: ignore
 
-
-def maybe_track(enabled: bool, **kwargs):
-    """Retorna um decorador de no-op quando telemetria desativada ou opik ausente."""
-    def _noop_decorator(func):
-        return func
-    if enabled and opik is not None:
-        try:
-            return opik.track(**kwargs)
-        except (AttributeError, TypeError, ValueError):
-            return _noop_decorator
-    return _noop_decorator
+# Feature-flag para LISFLOOD (desativado por padrão)
+ENABLE_LISFLOOD = str(os.environ.get("ENABLE_LISFLOOD", "")
+                      ).strip().lower() in {"1", "true", "yes", "on"}
 
 
-# Import das funções de design (reexportadas em shapes/__init__.py)
+def maybe_track(enabled: bool = False, name: str = "", type: str = "", tags: Optional[list] = None, metadata: Optional[dict] = None):
+    """Decorator/closure no-op para telemetria segura.
 
-# ========= SIMULADOR NUMÉRICO =========
+    Uso esperado: @maybe_track(cond, name="evt")(func) ou maybe_track(cond, name=...)(lambda: None)()
+    """
+    def _decorator(fn):
+        def _wrapped(*args, **kwargs):
+            try:
+                if enabled and opik is not None:
+                    # Evita falhas se opik não estiver configurado
+                    _ = (name, type, tags, metadata)
+                return fn(*args, **kwargs)
+            except Exception:
+                return fn(*args, **kwargs)
+        return _wrapped
+    return _decorator
+
 
 class GamaFloodModelNumpy:
+    """Motor de simulação de inundação vetorizado com NumPy (versão local).
+
+    Parâmetros:
+    - dem_data: matriz 2D com altitudes
+    - sources_mask: máscara 2D (uint8/bool) com fontes de chuva
+    - diffusion_rate: fração de água que pode se mover por passo
+    - flood_threshold: limiar de inundação (m)
+    - cell_size_meters: tamanho da célula (m)
+    - river_mask: máscara opcional de rio (não obrigatório)
+    """
+
     def __init__(self, dem_data: np.ndarray, sources_mask: np.ndarray, diffusion_rate: float, flood_threshold: float, cell_size_meters: float, river_mask: Optional[np.ndarray] = None):
         self.height, self.width = dem_data.shape
-        self.diffusion_rate = diffusion_rate
-        self.flood_threshold = flood_threshold
-        self.cell_area = cell_size_meters * cell_size_meters
+        self.diffusion_rate = float(diffusion_rate)
+        self.flood_threshold = float(flood_threshold)
+        self.cell_area = float(cell_size_meters) * float(cell_size_meters)
         self.altitude = dem_data.astype(np.float32)
-        self.is_source = sources_mask.astype(bool)
-        self.river_mask = river_mask.astype(
-            bool) if river_mask is not None else None
+        self.is_source = (sources_mask.astype(
+            bool) if sources_mask is not None else np.zeros_like(self.altitude, dtype=bool))
+        self.river_mask = (river_mask.astype(
+            bool) if river_mask is not None else np.zeros_like(self.altitude, dtype=bool))
         self.water_height = np.zeros_like(self.altitude, dtype=np.float32)
         self.active_cells_coords = set(zip(*np.where(self.is_source)))
         self.simulation_time_minutes = 0
-        self.overflow_time_minutes = None
-        self.history = []
-        self.uniform_rain = False
+        self.overflow_time_minutes: Optional[int] = None
+        self.history: list[dict] = []
+        self.uniform_rain: bool = True
 
     def add_water(self, rain_mm: float):
-        water_to_add_meters = rain_mm / 1000.0
+        water_to_add_meters = float(rain_mm) / 1000.0
         if water_to_add_meters <= 0:
             return
-        if self.uniform_rain or not np.any(self.is_source):
+        # Chuva uniforme: aplica em toda a grade
+        if self.uniform_rain:
+            self.water_height += water_to_add_meters
+            # Ativar todas as células que agora têm água
+            ys, xs = np.where(self.water_height > 0)
+            self.active_cells_coords.update(zip(ys, xs))
+            return
+
+        # Caso não seja uniforme: aplicar nas fontes; se não houver fontes, usar rio como fallback; se ainda assim não houver, aplicar uniforme para evitar simulação "em branco"
+        if np.any(self.is_source):
+            self.water_height[self.is_source] += water_to_add_meters
+            ys, xs = np.where(self.is_source)
+            self.active_cells_coords.update(zip(ys, xs))
+        elif np.any(self.river_mask):
+            self.water_height[self.river_mask] += water_to_add_meters * 0.2
+            ys, xs = np.where(self.river_mask)
+            self.active_cells_coords.update(zip(ys, xs))
+        else:
+            # Fallback: sem fontes nem rio definidos, distribuir uniformemente
             self.water_height += water_to_add_meters
             ys, xs = np.where(self.water_height > 0)
             self.active_cells_coords.update(zip(ys, xs))
-        else:
-            self.water_height[self.is_source] += water_to_add_meters
-            self.active_cells_coords.update(zip(*np.where(self.is_source)))
 
     def run_flow_step(self):
         if not self.active_cells_coords:
             return
-        newly_active = set()
-        to_deactivate = set()
-        wh_prev = self.water_height.copy()
+        newly_active, to_deactivate = set(), set()
+        prev = self.water_height.copy()
+        H, W = self.height, self.width
         for y, x in list(self.active_cells_coords):
-            w = wh_prev[y, x]
-            if w <= 0.001:
+            cur_w = prev[y, x]
+            if cur_w <= 1e-3:
                 to_deactivate.add((y, x))
                 continue
-            current_total = self.altitude[y, x] + w
+            cur_total = self.altitude[y, x] + cur_w
             neigh = []
-            for dy in [-1, 0, 1]:
-                for dx in [-1, 0, 1]:
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
                     if dx == 0 and dy == 0:
                         continue
                     ny, nx = y + dy, x + dx
-                    if 0 <= ny < self.height and 0 <= nx < self.width:
+                    if 0 <= ny < H and 0 <= nx < W:
                         neigh.append((ny, nx))
             if not neigh:
                 continue
-            n_y, n_x = zip(*neigh)
-            n_total = self.altitude[n_y, n_x] + wh_prev[n_y, n_x]
-            mask_lower = n_total < current_total
+            ny, nx = zip(*neigh)
+            n_total = self.altitude[ny, nx] + prev[ny, nx]
+            mask_lower = n_total < cur_total
             if not np.any(mask_lower):
                 to_deactivate.add((y, x))
                 continue
             lower_coords = np.array(neigh)[mask_lower]
             lower_total = n_total[mask_lower]
-            total_diff = np.sum(current_total - lower_total)
+            total_diff = float(np.sum(cur_total - lower_total))
             if total_diff <= 0:
                 continue
-            to_distribute = w * self.diffusion_rate
-            for i, (ny, nx) in enumerate(lower_coords):
-                diff = current_total - lower_total[i]
-                frac = diff / total_diff
-                moved = min(to_distribute * frac, diff / 2.0)
-                if moved > 0:
-                    self.water_height[y, x] -= moved
-                    self.water_height[ny, nx] += moved
-                    newly_active.add((ny, nx))
+            move_amount = cur_w * self.diffusion_rate
+            if move_amount <= 0:
+                continue
+            for i, (ny2, nx2) in enumerate(lower_coords):
+                diff = cur_total - lower_total[i]
+                frac = float(diff) / total_diff
+                wmv = min(move_amount * frac, diff / 2.0)
+                if wmv > 0:
+                    self.water_height[y, x] -= wmv
+                    self.water_height[ny2, nx2] += wmv
+                    newly_active.add((ny2, nx2))
         self.active_cells_coords.difference_update(to_deactivate)
         self.active_cells_coords.update(newly_active)
 
-    def update_stats(self, step_min: int):
-        self.simulation_time_minutes += step_min
+    def update_stats(self, time_step_minutes: int):
+        self.simulation_time_minutes += int(time_step_minutes)
         inundated = self.water_height > self.flood_threshold
-        baseline_mask = self.river_mask if self.river_mask is not None else self.is_source
-        flooded_outside = inundated & ~baseline_mask
-        if self.overflow_time_minutes is None and np.any(flooded_outside):
+        if self.overflow_time_minutes is None and np.any(inundated & ~self.is_source):
             self.overflow_time_minutes = self.simulation_time_minutes
-        flooded_percent = float(np.sum(inundated)) / inundated.size * 100.0
-        total_water = float(np.sum(self.water_height * self.cell_area))
-        max_depth = float(np.max(self.water_height)
-                          ) if self.water_height.size else 0.0
         self.history.append({
             "time_minutes": self.simulation_time_minutes,
-            "flooded_percent": flooded_percent,
-            "active_cells": len(self.active_cells_coords),
-            "max_depth": max_depth,
-            "total_water_volume_m3": total_water
+            "flooded_percent": float(np.sum(inundated)) / float(inundated.size) * 100.0,
+            "active_cells": int(len(self.active_cells_coords)),
+            "max_depth": float(np.max(self.water_height)) if self.water_height.size > 0 else 0.0,
+            "total_water_volume_m3": float(np.sum(self.water_height * self.cell_area)),
         })
 
 
-def _process_uploaded_files(dem_file, vector_files) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    if not dem_file or not vector_files:
+def _prepare_background(img_path: str, target_shape: Tuple[int, int], target_crs) -> Optional[np.ndarray]:
+    """Carrega um raster de fundo (ex. DOM ortomosaico), reamostra para target_shape e retorna RGB float [0,1]."""
+    try:
+        H, W = target_shape
+        with rio.open(img_path) as src:
+            count = min(3, src.count or 1)
+            bands: list[np.ndarray] = []
+            for b in range(1, count + 1):
+                band = src.read(
+                    b,
+                    out_shape=(H, W),
+                    resampling=Resampling.bilinear,
+                ).astype(float)
+                bands.append(band)
+            if len(bands) == 1:
+                rgb = np.stack([bands[0]] * 3, axis=-1)
+            else:
+                rgb = np.stack(bands, axis=-1)
+            # Normalização robusta para [0,1]
+            if not np.issubdtype(rgb.dtype, np.floating):
+                rgb = rgb.astype(float)
+            finite_vals = rgb[np.isfinite(rgb)]
+            if finite_vals.size > 0:
+                p2, p98 = np.percentile(finite_vals, (2, 98))
+                p2 = max(float(p2), 0.0)
+                denom = (float(p98) - p2) or 1.0
+                rgb = np.clip((rgb - p2) / denom, 0, 1)
+            else:
+                rgb = np.zeros_like(rgb, dtype=float)
+            return rgb
+    except (OSError, ValueError, RuntimeError) as e:
+        st.warning(f"Falha ao preparar fundo (DOM): {e}")
+        return None
+
+
+def _process_uploaded_files(dem_file, vector_files):
+    """Salva DEM e arquivos vetoriais (primeiro .gpkg/.shp encontrado). Retorna (dem_path, vector_path, tmp_dir)."""
+    if not dem_file:
         return None, None, None
     tmp = tempfile.mkdtemp(prefix="sim_numpy_")
     dem_path = os.path.join(tmp, dem_file.name)
     with open(dem_path, "wb") as f:
         f.write(dem_file.getbuffer())
     vector_path = None
-    for f in vector_files:
+    for f in (vector_files or []):
         p = os.path.join(tmp, f.name)
         with open(p, "wb") as out:
             out.write(f.getbuffer())
-        if f.name.lower().endswith(".gpkg"):
-            vector_path = p
-        elif f.name.lower().endswith(".shp") and not vector_path:
+        if f.name.lower().endswith((".gpkg", ".shp")) and vector_path is None:
             vector_path = p
     return dem_path, vector_path, tmp
 
 
-def _setup_geodata(dem_path, vector_path: Optional[str], grid_reduction_factor, river_vector_path: Optional[str] = None):
+def _setup_geodata(dem_path: str, vector_path: Optional[str], grid_reduction_factor: int, river_path: Optional[str] = None):
+    """Lê DEM, reamostra grade, rasteriza fontes (e opcionalmente rio) e retorna (dem, sources_mask, transform, crs, cell_size_m, river_mask)."""
     with rio.open(dem_path) as dem_src:
-        dem_crs = dem_src.crs
-        orig_transform = dem_src.transform
-        new_h = max(1, dem_src.height // grid_reduction_factor)
-        new_w = max(1, dem_src.width // grid_reduction_factor)
+        crs = dem_src.crs
+        t = dem_src.transform
+        factor = max(1, int(grid_reduction_factor))
+        h2 = max(1, dem_src.height // factor)
+        w2 = max(1, dem_src.width // factor)
         dem_data = dem_src.read(1, out_shape=(
-            new_h, new_w), resampling=Resampling.bilinear)
-        transform = from_origin(
-            orig_transform.xoff,
-            orig_transform.yoff,
-            orig_transform.a * grid_reduction_factor,
-            abs(orig_transform.e) * grid_reduction_factor,
-        )
-        # Tamanho da célula
-        if dem_crs and dem_crs.is_geographic:
-            st.warning(
-                f"CRS geográfico detectado ({dem_crs.to_string()}). Converta para UTM para resultados precisos.")
-            # Cálculo mais realista considerando latitude do centro do DEM
-            bounds = dem_src.bounds
-            center_lat = (bounds.top + bounds.bottom) / 2.0
-            meters_per_degree_lat = 111_320
-            meters_per_degree_lon = 111_320 * np.cos(np.radians(center_lat))
-            cell_width_m = abs(
-                dem_src.res[0]) * meters_per_degree_lon * grid_reduction_factor
-            cell_height_m = abs(
-                dem_src.res[1]) * meters_per_degree_lat * grid_reduction_factor
-            cell_size_m = (cell_width_m + cell_height_m) / 2.0
+            h2, w2), resampling=Resampling.bilinear)
+        # Construir novo transform com base na origem e no tamanho de pixel reamostrado
+        px = abs(float(t.a)) * factor
+        py = abs(float(t.e)) * factor
+        transform = from_origin(float(getattr(t, 'c', 0.0) or t.c), float(
+            getattr(t, 'f', 0.0) or t.f), px, py)
+        # Tamanho de célula (m) aproximado
+        if crs and crs.is_geographic:
+            cell_size = px * 111320.0
         else:
-            # CRS projetado (e.g., UTM): resolução já em metros
-            cell_size_m = abs(dem_src.res[0]) * grid_reduction_factor
-        st.info(
-            f"CRS do DEM: {dem_crs}. Tamanho de célula efetivo: {cell_size_m:.3f} m")
-    if vector_path is None:
-        st.info(
-            "Sem vetor de fontes enviado. Usando a área inteira como fonte de chuva.")
-        sources_mask = np.ones(dem_data.shape, dtype=np.uint8)
-    else:
-        gdf = gpd.read_file(vector_path).to_crs(dem_crs)
+            cell_size = px
+
+    # Rasterizar fontes (vetor)
+    if vector_path:
+        gdf = gpd.read_file(vector_path)
+        if gdf.crs is None and crs is not None:
+            gdf = gdf.set_crs(crs)
+        elif crs is not None and gdf.crs != crs:
+            gdf = gdf.to_crs(crs)
         sources_mask = rasterize(
             gdf.geometry,
             out_shape=dem_data.shape,
@@ -224,118 +274,60 @@ def _setup_geodata(dem_path, vector_path: Optional[str], grid_reduction_factor, 
             all_touched=True,
             dtype=np.uint8,
         )
-        if not np.any(sources_mask > 0):
-            st.warning(
-                "Nenhum pixel de 'fonte de água' foi rasterizado sobre o DEM. Aplicando chuva uniforme em toda a área.")
-            sources_mask = np.ones_like(sources_mask, dtype=np.uint8)
-    river_mask = None
-    if river_vector_path:
+    else:
+        sources_mask = np.zeros_like(dem_data, dtype=np.uint8)
+
+    # Rasterizar rio (opcional)
+    river_mask = np.zeros_like(dem_data, dtype=bool)
+    if river_path and os.path.exists(river_path):
         try:
-            gdf_river = gpd.read_file(river_vector_path).to_crs(dem_crs)
+            rgdf = gpd.read_file(river_path)
+            if rgdf.crs is None and crs is not None:
+                rgdf = rgdf.set_crs(crs)
+            elif crs is not None and rgdf.crs != crs:
+                rgdf = rgdf.to_crs(crs)
             river_mask = rasterize(
-                gdf_river.geometry,
+                rgdf.geometry,
                 out_shape=dem_data.shape,
                 transform=transform,
                 fill=0,
                 all_touched=True,
                 dtype=np.uint8,
-            )
-        except (OSError, ValueError, RuntimeError) as e:
-            st.warning(f"Falha ao ler/rasterizar rio: {e}")
-            river_mask = None
-    return dem_data, sources_mask, transform, dem_crs, cell_size_m, river_mask
+            ).astype(bool)
+        except Exception:
+            river_mask = np.zeros_like(dem_data, dtype=bool)
+
+    return dem_data, sources_mask, transform, crs, cell_size, river_mask
 
 
-def _setup_visualization(dem_data, transform, dem_crs, background_rgb=None, apply_hillshade=False, hs_intensity=0.6):
-    fig, ax = plt.subplots(figsize=(12, 9))
+def _setup_visualization(dem_data: np.ndarray, transform, crs, background_rgb: Optional[np.ndarray], apply_hs: bool, hs_intensity: float):
+    """Prepara a figura principal e camadas (água e partículas de chuva)."""
+    fig, ax = plt.subplots(figsize=(10, 8))
     bounds = array_bounds(dem_data.shape[0], dem_data.shape[1], transform)
-    if background_rgb is not None:
-        # Realce de contraste e saturação usando PIL
-        from PIL import Image, ImageEnhance
-        img = background_rgb
-        if img.max() <= 1.0:
-            img = (img * 255).astype(np.uint8)
-        pil_img = Image.fromarray(img)
-        pil_img = ImageEnhance.Contrast(pil_img).enhance(2.0)
-        pil_img = ImageEnhance.Color(pil_img).enhance(2.0)
-        img = np.array(pil_img)
-        if apply_hillshade:
-            dem_norm = dem_data.astype(float)
-            dem_norm = (dem_norm - np.nanmin(dem_norm)) / \
-                (np.nanmax(dem_norm) - np.nanmin(dem_norm) + 1e-9)
-            ls = LightSource(azdeg=315, altdeg=45)
-            try:
-                shaded = ls.shade_rgb(img, dem_norm, fraction=hs_intensity)
-                ax.imshow(shaded, extent=bounds, alpha=1.0)
-            except (ValueError, RuntimeError, TypeError):
-                ax.imshow(img, extent=bounds, alpha=1.0)
-        else:
-            ax.imshow(img, extent=bounds, alpha=1.0)
+
+    # Fundo: DOM/Orto se fornecido, caso contrário DEM
+    if background_rgb is not None and background_rgb.shape[:2] == dem_data.shape:
+        img = (np.clip(background_rgb, 0, 1) * 255).astype(np.uint8)
+        ax.imshow(img, extent=bounds, alpha=1.0)
     else:
-        vmin, vmax = (np.percentile(dem_data[dem_data > 0], (5, 95)) if (
-            dem_data > 0).any() else (0, 1))
-        ax.imshow(dem_data, extent=bounds, cmap="terrain",
-                  alpha=0.85, vmin=vmin, vmax=vmax)
-        with contextlib.suppress(OSError, ValueError, RuntimeError):
-            ctx.add_basemap(ax, crs=dem_crs, source='CartoDB.Positron')
-    # Colormap da água com azul mais forte e 'under' transparente (sem água)
-    water_cmap = mcolors.LinearSegmentedColormap.from_list(
-        "water_strong",
-        [
-            (0.70, 0.82, 1.00),  # azul claro mais fechado
-            (0.18, 0.34, 0.85),  # azul médio escuro
-            (0.05, 0.12, 0.45),  # azul bem escuro
-            (0.00, 0.02, 0.18),  # azul marinho
-        ],
-        N=256,
-    )
-    # totalmente transparente abaixo do vmin
-    water_cmap.set_under((0, 0, 0, 0.0))
-    # Camada de água inicial vazia; vmin será atualizado por frame
-    water_mask = np.zeros_like(dem_data)
-    water_layer = ax.imshow(
-        np.zeros_like(dem_data), extent=bounds, cmap=water_cmap, alpha=1.0, vmin=1e-6, vmax=1.0
-    )
-    x_min, y_min, x_max, y_max = bounds
+        dem_b = dem_data.astype(float)
+        vmin, vmax = np.nanpercentile(
+            dem_b, (5, 95)) if np.isfinite(dem_b).any() else (0, 1)
+        ax.imshow(dem_b, extent=bounds, cmap="terrain",
+                  vmin=vmin, vmax=vmax, alpha=0.85)
+
+    # Opcional: mapa base online por trás
+    with contextlib.suppress(Exception):
+        ctx.add_basemap(ax, crs=crs, source='CartoDB.Positron')
+
+    water_layer = ax.imshow(np.zeros_like(
+        dem_data), extent=bounds, cmap='Blues', alpha=0.0, vmin=0, vmax=1)
     rain_particles, = ax.plot(
-        [], [], ".", color="royalblue", markersize=1.0, alpha=0.7, zorder=10)
-    title = ax.set_title("Simulação de Inundação | Tempo: 0h 0m",
-                         color="black", fontweight="bold")
+        [], [], '.', color='royalblue', markersize=1.0, alpha=0.7)
+    title = ax.set_title("Simulação de Inundação | Tempo: 0h 0m")
     ax.set_axis_off()
     fig.tight_layout(pad=0)
-    # Camada de probabilidade (IA), inicializada vazia e invisível
-    prob_layer = ax.imshow(np.zeros_like(
-        dem_data), extent=bounds, cmap="Reds", alpha=0.0, vmin=0.0, vmax=1.0)
-    return fig, ax, water_layer, rain_particles, title, (x_min, y_min, x_max, y_max)
-
-
-def _prepare_background(dom_path: str, target_shape, target_crs) -> Optional[np.ndarray]:
-    try:
-        with rio.open(dom_path) as src:
-            if src.crs and target_crs and (src.crs != target_crs):
-                st.warning(
-                    f"CRS do DOM ({src.crs}) difere do DEM ({target_crs}). A visualização será reamostrada por dimensão apenas.")
-            H, W = target_shape
-            count = min(src.count, 3)
-            bands = []
-            for b in range(1, count+1):
-                band = src.read(b, out_shape=(H, W),
-                                resampling=Resampling.bilinear)
-                bands.append(band)
-            if len(bands) == 1:
-                rgb = np.stack([bands[0]]*3, axis=-1)
-            else:
-                rgb = np.stack(bands, axis=-1)
-            if rgb.dtype != np.uint8:
-                p2, p98 = np.percentile(rgb[np.isfinite(rgb)], (2, 98)) if np.isfinite(
-                    rgb).any() else (0, 1)
-                p2 = max(p2, 0)
-                denom = (p98 - p2) if (p98 - p2) != 0 else 1
-                rgb = np.clip((rgb - p2) / denom, 0, 1)
-            return rgb
-    except (OSError, ValueError, RuntimeError) as e:
-        st.warning(f"Falha ao preparar fundo (DOM): {e}")
-    return None
+    return fig, ax, water_layer, rain_particles, title, bounds
 
 
 def _visualize_geotiff(fp: str):
@@ -353,6 +345,410 @@ def _visualize_geotiff(fp: str):
     ax.set_title(os.path.basename(fp))
     ax.set_axis_off()
     st.pyplot(fig, clear_figure=True)
+
+# ========= FUNÇÕES DE ANÁLISE E MITIGAÇÃO =========
+
+
+def _analyze_terrain_for_mitigation(dem: np.ndarray, flood_prob: np.ndarray, river_mask: Optional[np.ndarray] = None,
+                                    prob_threshold: float = 0.7, min_slope: float = 0.01, cell_size_m: float = 1.0) -> tuple[np.ndarray, dict]:
+    """
+    Analisa o terreno para sugerir medidas de mitigação.
+    Retorna:
+    - intervention_mask: máscara com tipos de intervenção (1=florestação, 2=dique, 3=drenagem, 4=aterro)
+    - suggestions: dicionário com análises detalhadas
+    """
+    H, W = dem.shape
+    suggestions: Dict[str, Any] = {
+        "florestamento": {"areas": [], "percentual": 0.0, "beneficio_estimado": 0.0},
+        "diques": {"locais": [], "comprimento_estimado": 0.0, "areas_protegidas": []},
+        "sistemas_drenagem": {"locais": [], "volume_estimado": 0.0},
+        "aterro_terreno": {"areas": [], "volume_estimado": 0.0},
+        "reservatorios": {"locais": [], "volume_estimado": 0.0}
+    }
+
+    intervention_mask = np.zeros_like(dem, dtype=np.uint8)
+    try:
+        dem_f = dem.astype(float)
+        gy, gx = np.gradient(dem_f)
+        # Normalizar declividade por tamanho de célula (m/m). Evita thresholds inconsistentes.
+        cs = max(1e-9, float(cell_size_m))
+        slope = np.hypot(gx, gy) / cs
+
+        # Risco de inundação (booleano)
+        prob_f = np.clip(flood_prob.astype(float), 0.0, 1.0)
+        high_flood_risk = prob_f >= float(prob_threshold)
+        # Médio risco: valores intermediários para alimentar drenagem
+        medium_flood_risk = (prob_f >= 0.25) & (prob_f < float(prob_threshold))
+
+        # 1) Florestamento
+        gentle_slope = slope < float(min_slope)
+        forest_candidates = high_flood_risk & gentle_slope
+        if np.any(forest_candidates):
+            labeled_forest, num_forest = cast(
+                Tuple[np.ndarray, int], ndimage.label(forest_candidates))
+            for i in range(1, num_forest + 1):
+                area_mask = labeled_forest == i
+                area_size = int(np.sum(area_mask))
+                if area_size > 10:
+                    y_coords, x_coords = np.where(area_mask)
+                    centroid_y, centroid_x = float(
+                        np.mean(y_coords)), float(np.mean(x_coords))
+                    suggestions["florestamento"]["areas"].append({
+                        "centroide": (centroid_x, centroid_y),
+                        "tamanho_pixels": area_size,
+                        "beneficio_estimado": float(min(1.0, area_size / (H * W) * 10))
+                    })
+                    intervention_mask[area_mask] = 1
+        suggestions["florestamento"]["percentual"] = float(
+            np.sum(forest_candidates)) / float(H * W) * 100.0
+
+        # 2) Diques próximos ao rio
+        if river_mask is not None and np.any(river_mask):
+            structure = np.ones((7, 7), dtype=bool)
+            river_bool = river_mask.astype(bool)
+            river_buffer = ndimage.binary_dilation(
+                river_bool, structure=structure).astype(bool)
+            high_risk_near_river = (
+                high_flood_risk.astype(bool) & river_buffer & (~river_bool))
+            if np.any(high_risk_near_river):
+                labeled_dikes, num_dikes = cast(
+                    Tuple[np.ndarray, int], ndimage.label(high_risk_near_river))
+                total_length = 0.0
+                for i in range(1, num_dikes + 1):
+                    dike_mask = labeled_dikes == i
+                    if int(np.sum(dike_mask)) > 5:
+                        y_coords, x_coords = np.where(dike_mask)
+                        if len(y_coords) > 1:
+                            coords = np.column_stack([x_coords, y_coords])
+                            clustering = DBSCAN(
+                                eps=2, min_samples=3).fit(coords)
+                            for cluster_id in set(clustering.labels_):
+                                if cluster_id == -1:
+                                    continue
+                                cluster_coords = coords[clustering.labels_ == cluster_id]
+                                if len(cluster_coords) > 2:
+                                    length = float(len(cluster_coords)) * 0.5
+                                    total_length += length
+                                    centroid = np.mean(cluster_coords, axis=0)
+                                    suggestions["diques"]["locais"].append({
+                                        "centroide": (float(centroid[0]), float(centroid[1])),
+                                        "comprimento_estimado": length,
+                                        "areas_protegidas": int(len(cluster_coords))
+                                    })
+                                    intervention_mask[dike_mask] = 2
+                suggestions["diques"]["comprimento_estimado"] = total_length
+
+        # 3) Sistemas de drenagem
+        local_min = ndimage.minimum_filter(dem_f, size=5) == dem_f
+        drainage_candidates = local_min & medium_flood_risk
+        if np.any(drainage_candidates):
+            volume_total = 0.0
+            labeled_drainage, num_drainage = cast(
+                Tuple[np.ndarray, int], ndimage.label(drainage_candidates))
+            for i in range(1, num_drainage + 1):
+                drain_mask = labeled_drainage == i
+                area_size = int(np.sum(drain_mask))
+                if area_size > 3:
+                    depression_depth = float(np.percentile(
+                        dem_f[drain_mask], 25) - np.min(dem_f[drain_mask]))
+                    volume = area_size * max(0.1, depression_depth)
+                    volume_total += volume
+                    y_coords, x_coords = np.where(drain_mask)
+                    centroid_y, centroid_x = float(
+                        np.mean(y_coords)), float(np.mean(x_coords))
+                    suggestions["sistemas_drenagem"]["locais"].append({
+                        "centroide": (centroid_x, centroid_y),
+                        "volume_estimado": float(volume),
+                        "area_pixels": area_size
+                    })
+                    intervention_mask[drain_mask] = 3
+            suggestions["sistemas_drenagem"]["volume_estimado"] = float(
+                volume_total)
+
+        # 4) Aterro em áreas baixas críticas
+        valid = dem_f[np.isfinite(dem_f)]
+        p25 = float(np.percentile(valid, 25)) if valid.size > 0 else (
+            float(np.nanmin(dem_f)) if np.isfinite(dem_f).any() else 0.0)
+        low_areas = dem_f < p25
+        critical_low_areas = low_areas & high_flood_risk
+        if np.any(critical_low_areas):
+            volume_total = 0.0
+            labeled_fill, num_fill = cast(
+                Tuple[np.ndarray, int], ndimage.label(critical_low_areas))
+            for i in range(1, num_fill + 1):
+                fill_mask = labeled_fill == i
+                area_size = int(np.sum(fill_mask))
+                if area_size > 5:
+                    vals = dem_f[fill_mask]
+                    fill_height = float(
+                        np.percentile(vals, 75) - np.mean(vals))
+                    volume = area_size * max(0.5, fill_height)
+                    volume_total += volume
+                    y_coords, x_coords = np.where(fill_mask)
+                    centroid_y, centroid_x = float(
+                        np.mean(y_coords)), float(np.mean(x_coords))
+                    suggestions["aterro_terreno"]["areas"].append({
+                        "centroide": (centroid_x, centroid_y),
+                        "volume_necessario": float(volume),
+                        "area_pixels": area_size,
+                        "altura_media_aterro": float(fill_height)
+                    })
+                    intervention_mask[fill_mask] = 4
+            suggestions["aterro_terreno"]["volume_estimado"] = float(
+                volume_total)
+
+        total_benefit = (
+            suggestions["florestamento"]["percentual"] * 0.1 +
+            len(suggestions["diques"]["locais"]) * 0.3 +
+            len(suggestions["sistemas_drenagem"]["locais"]) * 0.2 +
+            len(suggestions["aterro_terreno"]["areas"]) * 0.4
+        )
+        suggestions["beneficio_total_estimado"] = float(
+            min(10.0, total_benefit))
+    except Exception as e:
+        print(f"Erro na análise de mitigação: {e}")
+    return intervention_mask, suggestions
+
+
+def _discover_icon_paths(icon_dir: Optional[str] = None) -> Dict[int, Optional[str]]:
+    """Descobre caminhos de ícones por classe usando pastas conhecidas e um diretório opcional.
+    Classes: 1=florestamento, 2=diques, 3=drenagem, 4=aterro.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates: list[str] = []
+    if icon_dir:
+        candidates.append(icon_dir)
+    candidates.extend([
+        os.path.join(base_dir, 'logos', 'icons'),
+        os.path.join(base_dir, 'icons'),
+        os.path.join(base_dir, 'logos'),
+    ])
+
+    def _find_icon(names: list[str]) -> Optional[str]:
+        for d in candidates:
+            for n in names:
+                p = os.path.join(d, n)
+                if os.path.exists(p):
+                    return p
+        return None
+
+    icon_map: Dict[int, Optional[str]] = {
+        1: _find_icon(['tree.png', 'florestamento.png', 'arvore.png']),
+        2: _find_icon(['dike.png', 'diques.png', 'barragem.png']),
+        3: _find_icon(['drainage.png', 'drenagem.png', 'sistemaDrenagem.png']),
+        4: _find_icon(['fill.png', 'aterro.png', 'aterroNoTerreno.png']),
+    }
+    return icon_map
+
+
+def _create_mitigation_map(dem: np.ndarray, intervention_mask: np.ndarray, suggestions: dict,
+                           transform, crs, background_rgb: Optional[np.ndarray] = None,
+                           use_icons: bool = False, icon_dir: Optional[str] = None, icon_size: int = 24):
+    """Cria mapa visual com sugestões de mitigação."""
+    bounds = array_bounds(dem.shape[0], dem.shape[1], transform)
+    fig, ax = plt.subplots(figsize=(12, 10))
+    # Base
+    if background_rgb is not None and background_rgb.shape[:2] == dem.shape:
+        img = (np.clip(background_rgb, 0, 1) * 255).astype(np.uint8)
+        ax.imshow(img, extent=bounds, alpha=0.8)
+    else:
+        dem_f = np.asarray(dem, dtype=float)
+        finite = np.isfinite(dem_f)
+        if np.any(finite):
+            vmin, vmax = np.nanpercentile(dem_f[finite], (5, 95))
+            if not np.isfinite(vmin) or not np.isfinite(vmax) or vmin == vmax:
+                vmin, vmax = float(np.nanmin(dem_f[finite])), float(
+                    np.nanmax(dem_f[finite]) + 1e-6)
+            ax.imshow(dem_f, extent=bounds, cmap="terrain",
+                      vmin=vmin, vmax=vmax, alpha=0.8)
+        else:
+            # Fallback: gradiente simples para evitar figura em branco
+            grad = np.linspace(
+                0, 1, dem_f.size, dtype=float).reshape(dem_f.shape)
+            ax.imshow(grad, extent=bounds, cmap="Greys",
+                      vmin=0, vmax=1, alpha=0.6)
+
+    # Paleta e rótulos (RGBA 0..1)
+    colors = {1: (0, 0.7, 0, 0.45), 2: (0.8, 0.2, 0.2, 0.5),
+              3: (0, 0.5, 1, 0.45), 4: (0.9, 0.7, 0, 0.45)}
+    labels = {1: "Florestamento/Vegetação", 2: "Diques/Proteção Ribeirinha",
+              3: "Sistemas de Drenagem", 4: "Aterro/Elevação do Terreno"}
+
+    # Overlay de cores por classe (mais leve e limpo que scatter por pixel)
+    any_points = np.any(intervention_mask > 0)
+    if any_points:
+        H, W = intervention_mask.shape
+        overlay = np.zeros((H, W, 4), dtype=float)
+        for cls in [1, 2, 3, 4]:
+            mk = intervention_mask == cls
+            if np.any(mk):
+                r, g, b, a = colors[cls]
+                overlay[mk, 0] = r
+                overlay[mk, 1] = g
+                overlay[mk, 2] = b
+                overlay[mk, 3] = a
+        ax.imshow(overlay, extent=bounds, alpha=1.0)
+
+    # Ícones (opcional) nas posições de centróides das sugestões
+    def _try_icon(path: str, size_px: int) -> Optional[OffsetImage]:
+        try:
+            im = Image.open(path).convert('RGBA')
+            im_arr = np.asarray(im)
+            return OffsetImage(im_arr, zoom=max(0.1, size_px/64.0))
+        except Exception:
+            return None
+
+    if use_icons and any_points:
+        icon_map = _discover_icon_paths(icon_dir)
+
+        # Preparar listas de centros por classe
+        centers_by_cls: dict[int, list[tuple[float, float]]] = {
+            1: [], 2: [], 3: [], 4: []}
+        from rasterio.transform import xy as _xy
+        # Florestamento
+        for a in suggestions.get('florestamento', {}).get('areas', []):
+            cx, cy = a.get('centroide', (None, None))
+            if cx is None or cy is None:
+                continue
+            xw, yw = _xy(transform, [int(cy)], [int(cx)])
+            centers_by_cls[1].append((xw[0], yw[0]))
+        # Diques
+        for d in suggestions.get('diques', {}).get('locais', []):
+            cx, cy = d.get('centroide', (None, None))
+            if cx is None or cy is None:
+                continue
+            xw, yw = _xy(transform, [int(cy)], [int(cx)])
+            centers_by_cls[2].append((xw[0], yw[0]))
+        # Drenagem
+        for d in suggestions.get('sistemas_drenagem', {}).get('locais', []):
+            cx, cy = d.get('centroide', (None, None))
+            if cx is None or cy is None:
+                continue
+            xw, yw = _xy(transform, [int(cy)], [int(cx)])
+            centers_by_cls[3].append((xw[0], yw[0]))
+        # Aterro
+        for a in suggestions.get('aterro_terreno', {}).get('areas', []):
+            cx, cy = a.get('centroide', (None, None))
+            if cx is None or cy is None:
+                continue
+            xw, yw = _xy(transform, [int(cy)], [int(cx)])
+            centers_by_cls[4].append((xw[0], yw[0]))
+
+        # Desenhar ícones
+        for cls in [1, 2, 3, 4]:
+            icon_path = icon_map.get(cls)
+            if not icon_path:
+                continue
+            img = _try_icon(icon_path, int(icon_size))
+            if img is None:
+                continue
+            for (xw, yw) in centers_by_cls.get(cls, []):
+                ab = AnnotationBbox(
+                    img, (xw, yw), frameon=False, pad=0.0, zorder=20)
+                ax.add_artist(ab)
+
+    with contextlib.suppress(Exception):
+        ctx.add_basemap(ax, crs=crs, source='CartoDB.Positron', alpha=0.5)
+
+    if any_points:
+        # Legenda com patches de cor
+        handles = [Patch(facecolor=colors[c][:3], alpha=colors[c]
+                         [3], label=labels[c]) for c in [1, 2, 3, 4]]
+        ax.legend(handles=handles, loc='upper right', fontsize=10)
+    else:
+        # Mensagem informativa na figura quando não há intervenções
+        cx = (bounds[0] + bounds[2]) / 2.0
+        cy = (bounds[1] + bounds[3]) / 2.0
+        ax.text(cx, cy, "Sem áreas elegíveis com os parâmetros atuais",
+                ha='center', va='center', fontsize=12,
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.75))
+    ax.set_title("Mapa de Sugestões de Mitigação de Inundações",
+                 fontsize=14, fontweight='bold')
+    ax.set_axis_off()
+    return fig
+
+
+def _generate_mitigation_report(suggestions: dict, cell_size: float) -> str:
+    """Gera relatório textual das sugestões."""
+    report = []
+    report.append("# 📋 RELATÓRIO DE SUGESTÕES DE MITIGAÇÃO")
+    report.append("")
+    benefit_score = float(suggestions.get("beneficio_total_estimado", 0))
+    if benefit_score > 7:
+        rating = " MUITO ALTO "
+    elif benefit_score > 5:
+        rating = " ALTO "
+    elif benefit_score > 3:
+        rating = " MÉDIO "
+    else:
+        rating = " BAIXO "
+    report.append(f"## 📊 Benefício Esperado: {rating}")
+    report.append("")
+
+    def _section(title, lines):
+        if lines:
+            report.append(title)
+            report.extend(lines)
+            report.append("")
+
+    forest = suggestions.get("florestamento", {})
+    if forest.get("areas"):
+        area_px = sum(a.get("tamanho_pixels", 0) for a in forest["areas"])
+        area_km2 = (float(area_px) * cell_size * cell_size) / 1e6
+        _section("## 🌳 FLORESTAMENTO E VEGETAÇÃO", [
+            f"- **Área total recomendada:** {area_km2:.2f} km²",
+            f"- **Número de áreas:** {len(forest['areas'])}",
+            f"- **Benefício:** Aumenta infiltração, reduz escoamento superficial",
+        ])
+
+    dikes = suggestions.get("diques", {})
+    if dikes.get("locais"):
+        total_length = sum(d.get("comprimento_estimado", 0.0)
+                           for d in dikes["locais"]) * cell_size
+        _section("## 🏗️ DIQUES E PROTEÇÕES RIBEIRINHAS", [
+            f"- **Comprimento total:** {total_length:.0f} m",
+            f"- **Número de trechos:** {len(dikes['locais'])}",
+            f"- **Benefício:** Proteção direta contra transbordamento de rios",
+        ])
+
+    drainage = suggestions.get("sistemas_drenagem", {})
+    if drainage.get("locais"):
+        total_volume = float(drainage.get(
+            "volume_estimado", 0.0)) * cell_size * cell_size
+        _section("## 💧 SISTEMAS DE DRENAGEM", [
+            f"- **Volume de água a ser drenado:** {total_volume:.0f} m³",
+            f"- **Número de depressões críticas:** {len(drainage['locais'])}",
+            f"- **Benefício:** Eliminação de pontos de acumulação de água",
+        ])
+
+    fill = suggestions.get("aterro_terreno", {})
+    if fill.get("areas"):
+        total_volume = float(fill.get("volume_estimado", 0.0)
+                             ) * cell_size * cell_size
+        _section("## 🗻 ATERRO E ELEVAÇÃO DO TERRENO", [
+            f"- **Volume total de terra:** {total_volume:.0f} m³",
+            f"- **Número de áreas críticas:** {len(fill['areas'])}",
+            f"- **Benefício:** Elevação de áreas baixas vulneráveis",
+        ])
+
+    report.append("## 💡 RECOMENDAÇÕES GERAIS")
+    if forest.get("areas"):
+        report.append(
+            "- **Priorize o florestamento** em áreas planas com alto risco")
+    if dikes.get("locais"):
+        report.append(
+            "- **Implemente diques** nos trechos críticos junto aos rios")
+    if drainage.get("locais"):
+        report.append(
+            "- **Instale sistemas de drenagem** nas depressões identificadas")
+    if fill.get("areas"):
+        report.append("- **Execute aterros seletivos** nas áreas mais baixas")
+    if not any([forest.get("areas"), dikes.get("locais"), drainage.get("locais"), fill.get("areas")]):
+        report.append(
+            "- **Situação favorável**: O terreno apresenta boa resiliência natural")
+        report.append(
+            "- **Ações preventivas**: Mantenha a vegetação existente e monitore áreas ribeirinhas")
+    return "\n".join(report)
 
 
 # ========= Funções auxiliares de IA =========
@@ -703,8 +1099,13 @@ def _post_process_simulation(model, _tmp_dir, anim_path, anim_format, total_rain
     st.subheader("📊 Resultados da Simulação")
 
     # 1. Estatísticas finais
-    total_rain_m3 = float(
-        np.sum((total_rain/1000.0) * (sources_mask > 0) * (cell_size*cell_size)))
+    # Se não houver fontes definidas (ou a simulação usou chuva uniforme), considere chuva sobre toda a área
+    if np.any(sources_mask):
+        rain_area_cells = np.sum(sources_mask > 0)
+    else:
+        rain_area_cells = sources_mask.size
+    total_rain_m3 = float((total_rain/1000.0) *
+                          rain_area_cells * (cell_size*cell_size))
     final_time = model.simulation_time_minutes
     h, m = divmod(final_time, 60)
     transbordo = (f"{divmod(model.overflow_time_minutes,60)[0]}h {divmod(model.overflow_time_minutes,60)[1]}m"
@@ -925,7 +1326,7 @@ def main():
         page_icon=os.path.join(os.path.dirname(
             os.path.abspath(__file__)), "logos", "logo.png"),
         layout="wide",
-        initial_sidebar_state="expanded"
+        initial_sidebar_state="collapsed"
     )
 
     # Aplicar estilos customizados
@@ -953,9 +1354,10 @@ def main():
     # Divisor visual
     st.markdown("---")
 
-    # ========= ABAS PRINCIPAIS =========
-    tab_numpy, tab_validation, tab_lisflood = st.tabs(
-        [" Simulação Rápida", "📈 Validação (IA)", "⚙️ LISFLOOD Avançado"])
+    # ========= ABAS PRINCIPAIS (apenas vetorizado e validação) =========
+    tab_numpy, tab_validation = st.tabs([
+        " Simulação Rápida", " Validação (IA)"
+    ])
 
     with tab_numpy:
         st.header("Simulação Vetorizada")
@@ -1120,6 +1522,10 @@ def main():
                     0.3, 2.0, 0.7, 0.05,
                     help="<1 realça diferenças em águas rasas (mais contraste); >1 suaviza."
                 )
+
+            # Persistir parâmetros visuais para uso em exportações
+            st.session_state["water_alpha"] = float(water_alpha)
+            st.session_state["water_gamma"] = float(water_gamma)
 
             # Parâmetros adicionais
             col_adv1, col_adv2 = st.columns(2)
@@ -1426,8 +1832,11 @@ def main():
                                 river_path = rp
 
                 # Configurar dados geoespaciais
+                assert dem_path is not None, "Caminho do DEM não pode ser None"
+                gf = int(grid_reduction_factor[0]) if isinstance(
+                    grid_reduction_factor, tuple) else int(grid_reduction_factor)
                 dem_data, sources_mask, transform, crs, cell_size, river_mask = _setup_geodata(
-                    dem_path, vector_path, grid_reduction_factor, river_path
+                    dem_path, vector_path, gf, river_path
                 )
 
                 # Inicializar modelo
@@ -1436,6 +1845,12 @@ def main():
                     flood_threshold, cell_size, river_mask
                 )
                 model.uniform_rain = (rain_mode == "Uniforme na área")
+
+                # Fallback: se usuário escolheu "Somente nas fontes", mas não há fontes nem rio, aplicar chuva uniforme para evitar resultado em branco
+                if (rain_mode != "Uniforme na área") and (not np.any(sources_mask)) and (not np.any(river_mask)):
+                    st.info(
+                        "Nenhuma fonte vetorial ou rio definidos. Aplicando chuva uniforme na área para evitar resultado vazio.")
+                    model.uniform_rain = True
 
                 # Preparar fundo visual
                 background_rgb = None
@@ -1661,6 +2076,10 @@ def main():
                 st.session_state["last_transform"] = transform
                 st.session_state["last_crs"] = crs
                 st.session_state["last_water_height"] = model.water_height.copy()
+                st.session_state["last_river_mask"] = river_mask
+                st.session_state["last_cell_size"] = float(cell_size)
+                st.session_state["last_flood_threshold"] = float(
+                    flood_threshold)
 
                 # Pós-processamento e downloads
                 total_rain_mm = float(rain_mm_per_cycle) * \
@@ -1693,419 +2112,152 @@ def main():
                     shutil.rmtree(tmp, ignore_errors=True)
                 plt.close('all')
 
-    with tab_lisflood:
-        st.header("Simulação LISFLOOD (Docker)")
-
-        # Sidebar com parâmetros LISFLOOD
-        with st.sidebar:
-            st.markdown("### 📁 Dados de Entrada LISFLOOD")
-
-            dem_file_lf = st.file_uploader(
-                "DEM .tif",
-                type=["tif", "tiff"],
-                key="lf_dem"
-            )
-
-            dom_file_lf = st.file_uploader(
-                "DOM .tif (opcional)",
-                type=["tif", "tiff"],
-                key="lf_dom"
-            )
-
-            dsm_file_lf = st.file_uploader(
-                "DSM .tif (opcional)",
-                type=["tif", "tiff"],
-                key="lf_dsm"
-            )
-
-            stl_file_lf = st.file_uploader(
-                "Modelo 3D (.stl) → gerar DSM",
-                type=["stl"],
-                key="lf_stl"
-            )
-
-            # Parâmetros STL→DSM
-            with st.expander("🔧 Parâmetros STL→DSM"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    x_offset = st.number_input("Offset X", value=0.0, step=1.0)
-                    y_offset = st.number_input("Offset Y", value=0.0, step=1.0)
-                with col2:
-                    z_scale = st.number_input("Escala Z", value=1.0, step=0.1)
-                    rotation = st.number_input(
-                        "Rotação Z (°)", value=0.0, step=1.0)
-                preview_dsm = st.checkbox(
-                    "Pré-visualizar DSM gerado", value=True)
-
-            mask_file_lf = st.file_uploader(
-                "Máscara .tif (opcional)",
-                type=["tif", "tiff"],
-                key="lf_mask"
-            )
-
-            template_xml = st.file_uploader(
-                "Template XML (opcional)",
-                type=["xml"],
-                key="lf_tpl"
-            )
-
-            # Configurações de simulação
-            st.markdown("### ⚙️ Parâmetros de Simulação")
-            step_start = st.text_input(
-                "Início (dd/mm/aaaa HH:MM)", "01/01/2024 00:00")
-            step_end = st.text_input(
-                "Fim (dd/mm/aaaa HH:MM)", "01/01/2024 01:00")
-            timestep = st.number_input(
-                "Intervalo (segundos)", min_value=60, value=3600, step=60)
-
-            # Opções avançadas
-            st.markdown("### 🔧 Opções Avançadas")
-            generate_ldd = st.checkbox("Gerar LDD do DEM", value=True)
-            validate_only = st.checkbox(
-                "Apenas validar (--initonly)", value=True)
-            use_minimal_template = st.checkbox(
-                "Usar template mínimo", value=True)
-
-            # Telemetria para LISFLOOD
-            with st.expander("🧭 Telemetria (Opik)"):
-                telemetry_lf = st.checkbox(
-                    "Ativar telemetria Opik (LISFLOOD)",
-                    value=st.session_state.get("telemetry_enabled", False),
-                    help="Registra eventos de execução do LISFLOOD."
+        # ========= SEÇÃO DE MITIGAÇÃO =========
+        with st.expander("🛡️ Mitigação e Intervenções (Beta)"):
+            st.caption(
+                "Sugestões baseadas em IA para reduzir riscos de inundação")
+            col_m1, col_m2 = st.columns(2)
+            with col_m1:
+                mit_threshold = st.slider(
+                    "Limiar de risco para intervenções",
+                    0.1, 1.0, 0.45, 0.05,
+                    help="Probabilidade mínima (IA) para considerar área de risco"
                 )
-                st.session_state["telemetry_enabled"] = bool(telemetry_lf)
-                if opik is None:
-                    st.caption("Opik: ⚠️ não instalado/disponível.")
+                mit_min_slope = st.slider(
+                    "Declividade máxima para florestamento",
+                    0.001, 0.2, 0.05, 0.005,
+                    help="Áreas mais planas favorecem florestamento/vegetação"
+                )
+            with col_m2:
+                show_mitigation = st.checkbox(
+                    "Mostrar mapa de intervenções", value=False)
+                generate_report = st.button(
+                    "📄 Gerar Relatório de Mitigação", type="secondary")
+                use_icons = st.checkbox("Usar ícones nas intervenções", value=False,
+                                        help="Sobrepõe pequenos ícones (árvore, dique, drenagem, aterro) sobre as áreas sugeridas")
+                icon_size = st.slider("Tamanho dos ícones (px)", 12, 64, 24, 2)
+                icon_dir = st.text_input("Pasta de ícones (opcional)", value="",
+                                         help="Coloque seus arquivos PNG (tree.png, dike.png, drainage.png, fill.png). Se vazio, buscarei em ./logos/icons, ./icons e ./logos")
+
+            if st.button("🔍 Analisar Terreno para Mitigação", type="primary"):
+                dem_last = st.session_state.get('last_dem_data')
+                prob_last = st.session_state.get('ia_last_prob')
+                river_last = st.session_state.get('last_river_mask')
+                transform_last = st.session_state.get('last_transform')
+                crs_last = st.session_state.get('last_crs')
+                bg_last = st.session_state.get('last_background_rgb')
+                cell_size = float(st.session_state.get(
+                    'last_cell_size') or 10.0)
+
+                if dem_last is None:
+                    st.warning("Execute uma simulação primeiro.")
                 else:
-                    ver = getattr(opik, "__version__", "")
-                    cfg = "_opik_configured" in st.session_state
-                    st.caption(
-                        f"Opik: ✅ disponível{(' - versão ' + ver) if ver else ''}. Configurado: {'sim' if cfg else 'não'}.")
-                    if telemetry_lf and not cfg:
-                        # Configurar rapidamente em modo local, sem credenciais
+                    # Se a probabilidade IA ainda não foi gerada, mas há modelo treinado, calcule agora
+                    if prob_last is None and st.session_state.get('ia_model') is not None:
                         try:
-                            opik.configure(
-                                api_key=None, workspace=None, url=None, use_local=True, force=False)
-                            st.session_state["_opik_configured"] = True
-                            st.success("Opik configurado em modo local.")
-                        except Exception as _e:
-                            st.warning(f"Falha ao configurar Opik local: {_e}")
+                            prob_last = _predict_probability(
+                                st.session_state['ia_model'], dem_last)
+                            st.session_state['ia_last_prob'] = prob_last
+                        except Exception as _e_pred:
+                            st.warning(
+                                f"Falha ao gerar probabilidade automaticamente: {_e_pred}")
 
-        # Área principal de execução LISFLOOD
-        col_run, col_status = st.columns([2, 1])
-
-        with col_run:
-            st.subheader("🎯 Execução do LISFLOOD")
-
-            if st.button("🚀 Executar Simulação LISFLOOD", type="primary", key="run_lisflood"):
-                if not dem_file_lf:
-                    st.error(
-                        "⚠️ É necessário enviar um arquivo DEM para executar o LISFLOOD.")
-                else:
-                    # Preparar ambiente temporário
-                    tmp_dir = tempfile.mkdtemp(prefix="lisflood_run_")
-
-                    try:
-                        with st.spinner("🔄 Preparando ambiente de execução..."):
-                            # Criar estrutura de pastas
-                            input_folder, output_folder = lf_prepare_input_folder(
-                                tmp_dir)
-
-                            # Processar e salvar arquivos enviados
-                            def save_uploaded_file(uploaded_file, filename):
-                                if not uploaded_file:
-                                    return None
-                                path = os.path.join(input_folder, filename)
-                                with open(path, "wb") as f:
-                                    f.write(uploaded_file.getbuffer())
-                                return path
-
-                            # Salvar arquivos principais
-                            dem_path = save_uploaded_file(
-                                dem_file_lf, "dem.tif")
-                            dom_path = save_uploaded_file(
-                                dom_file_lf, "dom.tif")
-                            dsm_path = save_uploaded_file(
-                                dsm_file_lf, "dsm.tif")
-                            mask_path = save_uploaded_file(
-                                mask_file_lf, "mask.tif")
-
-                            # Processar STL se enviado
-                            if stl_file_lf and not dsm_path:
-                                st.info("🔄 Convertendo STL para DSM...")
-                                stl_path = save_uploaded_file(
-                                    stl_file_lf, "model.stl")
-                                dsm_output = os.path.join(
-                                    input_folder, "dsm_from_stl.tif")
-                                # Garantias mínimas
-                                if not dem_path or not os.path.exists(dem_path):
-                                    raise RuntimeError(
-                                        "DEM inválido ao converter STL→DSM.")
-                                if not stl_path or not os.path.exists(stl_path):
-                                    raise RuntimeError(
-                                        "STL inválido ao converter STL→DSM.")
-                                success, message = lf_convert_stl_to_dsm(
-                                    dem_path, stl_path, dsm_output,
-                                    x_offset=x_offset, y_offset=y_offset,
-                                    z_scale=z_scale, rot_deg=rotation
+                    if prob_last is None:
+                        # Fallback: estimar probabilidade a partir da lâmina d'água simulada
+                        water_last = st.session_state.get('last_water_height')
+                        ft = float(st.session_state.get(
+                            'last_flood_threshold') or 0.1)
+                        if water_last is not None:
+                            w = np.asarray(water_last, dtype=float)
+                            if np.isfinite(w).any():
+                                wmax = float(np.nanmax(w))
+                                if wmax > 0:
+                                    eps = 1e-6
+                                    prob_last = np.clip(
+                                        (w - ft) / max(eps, (wmax - ft)), 0.0, 1.0)
+                                    st.info(
+                                        "Usando probabilidade aproximada derivada da lâmina d'água simulada.")
+                                    st.session_state['ia_last_prob'] = prob_last
+                        if prob_last is None:
+                            st.warning(
+                                "Gere o mapa de probabilidade na seção de IA primeiro ou aumente a chuva/ciclos para obter lâmina d'água.")
+                    if prob_last is not None:
+                        with st.spinner("Analisando terreno e gerando sugestões..."):
+                            try:
+                                intervention_mask, suggestions = _analyze_terrain_for_mitigation(
+                                    np.asarray(dem_last), np.asarray(
+                                        prob_last),
+                                    river_last, mit_threshold, mit_min_slope, cell_size
                                 )
+                                st.session_state['mitigation_data'] = {
+                                    'intervention_mask': intervention_mask,
+                                    'suggestions': suggestions,
+                                    'cell_size': cell_size,
+                                    'transform': transform_last,
+                                    'crs': crs_last,
+                                    'background': bg_last,
+                                }
+                                st.success("Análise de mitigação concluída!")
+                            except Exception as e:
+                                st.error(f"Erro na análise: {e}")
 
-                                if success:
-                                    dsm_path = dsm_output
-                                    st.success("✅ DSM gerado com sucesso!")
-                                    if preview_dsm:
-                                        st.subheader("Pré-visualização do DSM")
-                                        _visualize_geotiff(dsm_path)
-                                else:
-                                    st.error(
-                                        f"❌ Falha na conversão: {message}")
+            mitigation_data = st.session_state.get('mitigation_data')
+            if show_mitigation and mitigation_data:
+                dem_last = st.session_state.get('last_dem_data')
+                transform_last = mitigation_data.get('transform')
+                crs_last = mitigation_data.get('crs')
+                bg_last = mitigation_data.get('background')
+                if dem_last is not None and transform_last is not None:
+                    fig_mit = _create_mitigation_map(
+                        np.asarray(dem_last),
+                        mitigation_data['intervention_mask'],
+                        mitigation_data['suggestions'],
+                        transform_last, crs_last, bg_last,
+                        use_icons=bool(use_icons),
+                        icon_dir=(icon_dir or None),
+                        icon_size=int(icon_size)
+                    )
+                    st.pyplot(fig_mit, clear_figure=True)
+                    if not np.any(mitigation_data['intervention_mask']):
+                        st.info(
+                            "Nenhuma intervenção foi identificada com os parâmetros atuais. Ajuste o limiar de risco ou a declividade máxima e tente novamente.")
+                    buf = io.BytesIO()
+                    fig_mit.savefig(buf, format='png', dpi=300,
+                                    bbox_inches='tight')
+                    buf.seek(0)
+                    st.download_button(
+                        "⬇️ Baixar Mapa de Intervenções (PNG)",
+                        buf.getvalue(),
+                        "mapa_intervencoes_mitigacao.png",
+                        "image/png",
+                        use_container_width=True,
+                    )
 
-                            # Copiar e converter rasters
-                            st.info("🔄 Processando dados de entrada...")
-                            if not dem_path or not os.path.exists(dem_path):
-                                raise RuntimeError("DEM ausente após upload.")
-                            lf_copy_rasters(
-                                input_folder, dem_path, dom_path, dsm_path, mask_path)
-
-                            # Garantir máscara PCRaster
-                            if os.path.exists(os.path.join(input_folder, "MASK.tif")):
-                                exit_code, stdout, stderr = lf_ensure_mask_pcraster(
-                                    input_folder)
-                                if exit_code != 0:
-                                    st.error(
-                                        f"Erro ao criar MASK.map: {stderr}")
-
-                            # Gerar LDD se necessário
-                            if generate_ldd:
-                                st.info("🔄 Gerando rede de drenagem (LDD)...")
-                                exit_code, stdout, stderr = lf_generate_ldd_from_dem(
-                                    input_folder)
-                                if exit_code == 0:
-                                    st.success("✅ LDD gerado com sucesso!")
-                                else:
-                                    st.error(f"❌ Erro ao gerar LDD: {stderr}")
-
-                            # Preparar arquivo de configuração
-                            st.info("🔄 Configurando arquivo de controle...")
-                            xml_path = os.path.join(
-                                input_folder, "lisflood_config.xml")
-
-                            replacements = {
-                                "MaskMap": "/input/MASK.map",
-                                "Ldd": "/input/Ldd.map",
-                                "PathOut": "/input/output/",
-                                "StepStart": step_start,
-                                "StepEnd": step_end,
-                                "DtSec": str(timestep),
-                                "DtInit": str(timestep),  # ADICIONADO
-                                "RepStep": "1",           # ADICIONADO
-                                "CalendarConvention": "proleptic_gregorian",
-                            }
-
-                            if use_minimal_template or not template_xml:
-                                create_lisflood_minimal_xml(
-                                    xml_path, replacements)
-                            else:
-                                # Usar template personalizado com patch seguro
-                                template_path = save_uploaded_file(
-                                    template_xml, "template.xml")
-                                if template_path and os.path.exists(template_path):
-                                    lf_patch_settings_xml_with_defaults(
-                                        template_path, xml_path, replacements
-                                    )
-                                else:
-                                    st.warning(
-                                        "Falha ao salvar template. Usando template mínimo.")
-                                    create_lisflood_minimal_xml(
-                                        xml_path, replacements)
-
-                            # Verificar se o XML foi criado corretamente
-                            if os.path.exists(xml_path):
-                                st.success(
-                                    f"✅ Arquivo de configuração criado: {xml_path}")
-                                # Verificação crítica: tags essenciais e elemento lfuser
-                                try:
-                                    import xml.etree.ElementTree as ET
-                                    tree = ET.parse(xml_path)
-                                    root = tree.getroot()
-                                    lfuser_el = root.find('lfuser')
-                                    with open(xml_path, 'r', encoding='utf-8') as f:
-                                        xml_content = f.read()
-                                    missing = [tag for tag in [
-                                        '<lfuser>', '<lfbinding>', 'DtInit', 'CalendarConvention'] if tag not in xml_content]
-                                    if lfuser_el is None or missing:
-                                        st.error(
-                                            f"❌ XML incompleto. Faltando: {missing or ['lfuser']} ")
-                                        st.code(xml_content, language='xml')
-                                        st.stop()
-                                    if st.checkbox("Mostrar conteúdo do XML (debug)"):
-                                        st.code(xml_content, language='xml')
-                                except Exception as e:
-                                    st.error(f"❌ Erro ao verificar XML: {e}")
-                                    st.stop()
-                            else:
-                                st.error(
-                                    "❌ Falha ao criar arquivo de configuração XML")
-                                st.stop()
-
-                        # Telemetria: início da execução LISFLOOD
-                        _telemetry_on = bool(st.session_state.get(
-                            "telemetry_enabled", False) and (opik is not None))
-                        maybe_track(_telemetry_on, name="lisflood_run_start", type="general", tags=["lisflood", "start"], metadata={
-                            "validate_only": bool(validate_only),
-                            "generate_ldd": bool(generate_ldd),
-                            "use_minimal_template": bool(use_minimal_template),
-                            "step_start": step_start,
-                            "step_end": step_end,
-                            "timestep_sec": int(timestep),
-                            "has_dom": bool(dom_file_lf is not None),
-                            "has_dsm": bool(dsm_file_lf is not None or stl_file_lf is not None),
-                            "has_mask": bool(mask_file_lf is not None),
-                        })(lambda: None)()
-
-                        # Executar LISFLOOD
-                        # Checagem real do Docker
-                        ok_docker, docker_msg = _check_docker_available()
-                        if not ok_docker:
-                            st.error("Docker não disponível: " + docker_msg)
-                            st.stop()
-                        st.info("🎯 Executando LISFLOOD no Docker...")
-
-                        extra_args = ["--initonly"] if validate_only else None
-                        exit_code, stdout, stderr = lf_run_lisflood(
-                            input_folder, "lisflood_config.xml", extra_args=extra_args
-                        )
-
-                        # Processar resultados
-                        st.subheader("📊 Resultados da Execução")
-
-                        # Exibir logs
-                        with st.expander("🔍 Logs de Execução"):
-                            st.text(f"Código de saída: {exit_code}")
-                            st.text_area("Saída padrão:", stdout, height=200)
-                            st.text_area("Erros:", stderr, height=200)
-
-                        if exit_code == 0:
-                            st.success(
-                                "✅ Simulação LISFLOOD concluída com sucesso!")
-                            maybe_track(_telemetry_on, name="lisflood_run_success", type="general", tags=["lisflood", "success"], metadata={
-                                "exit_code": int(exit_code),
-                                "out_len": len(stdout or ""),
-                            })(lambda: None)()
-
-                            # Listar arquivos de saída
-                            output_files = lf_list_outputs(output_folder)
-                            if output_files:
-                                st.subheader("📁 Arquivos Gerados")
-
-                                # Visualizar rasters
-                                tif_files = [
-                                    f for f in output_files if f.lower().endswith(('.tif', '.tiff'))]
-                                if tif_files:
-                                    selected_file = st.selectbox(
-                                        "Selecione um arquivo para visualizar:",
-                                        tif_files,
-                                        format_func=os.path.basename
-                                    )
-                                    if selected_file:
-                                        _visualize_geotiff(selected_file)
-
-                                # Download de resultados
-                                st.subheader("📥 Download dos Resultados")
-                                # Limitar a 10 arquivos
-                                for file_path in output_files[:10]:
-                                    file_name = os.path.basename(file_path)
-                                    with open(file_path, "rb") as f:
-                                        st.download_button(
-                                            label=f"📥 {file_name}",
-                                            data=f.read(),
-                                            file_name=file_name,
-                                            mime="application/octet-stream",
-                                            key=f"download_{file_name}"
-                                        )
-                            else:
-                                st.warning(
-                                    "⚠️ Nenhum arquivo de saída foi gerado.")
-
-                        else:
-                            st.error("❌ A simulação LISFLOOD encontrou erros.")
-                            maybe_track(_telemetry_on, name="lisflood_run_error", type="general", tags=["lisflood", "error"], metadata={
-                                "exit_code": int(exit_code),
-                                "err_len": len(stderr or ""),
-                            })(lambda: None)()
-
-                            # Análise de erros comuns
-                            if "missing" in stderr.lower():
-                                st.info(
-                                    "💡 Dica: Verifique se todos os arquivos necessários foram fornecidos.")
-                            if "permission" in stderr.lower():
-                                st.info(
-                                    "💡 Dica: Problema de permissão. Verifique o Docker.")
-
-                    except (RuntimeError, OSError, ValueError) as e:
-                        st.error(f"❌ Erro durante a execução: {str(e)}")
-                        import traceback
-                        st.code(traceback.format_exc())
-                        _telemetry_on = bool(st.session_state.get(
-                            "telemetry_enabled", False) and (opik is not None))
-                        maybe_track(_telemetry_on, name="lisflood_run_exception", type="general", tags=["lisflood", "exception"], metadata={
-                            "error": str(e)[:500],
-                        })(lambda: None)()
-
-                    finally:
-                        # Limpeza
-                        if os.path.exists(tmp_dir):
-                            shutil.rmtree(tmp_dir, ignore_errors=True)
-
-        with col_status:
-            st.subheader("📋 Status do Sistema")
-
-            # Verificar dependências
-            st.markdown("#### ✅ Verificações do Sistema")
-            ok_docker, docker_msg = _check_docker_available()
-            if ok_docker:
-                st.success("Docker: ✅ " + docker_msg)
-            else:
-                st.warning("Docker: ⚠️ " + docker_msg)
-
-            # Verificar arquivos de entrada
-            if dem_file_lf:
-                st.success("DEM: ✅ Carregado")
-            else:
-                st.warning("DEM: ⚠️ Aguardando upload")
-
-            # Status do trimesh (necessário para STL→DSM)
-            st.markdown("#### 📦 Dependência opcional: trimesh")
-            tri_ok, tri_msg = _check_trimesh_installed()
-            if tri_ok:
-                st.success("trimesh: ✅ " + tri_msg)
-            else:
-                st.warning("trimesh: ⚠️ " + tri_msg)
-                if st.button("Instalar trimesh agora", key="btn_install_trimesh"):
-                    with st.spinner("Instalando trimesh..."):
-                        code, out, err = _install_trimesh()
-                    if code == 0:
-                        st.success(
-                            "trimesh instalado. Talvez seja necessário recarregar a página do app.")
-                    else:
-                        st.error("Falha ao instalar trimesh.")
-                        with st.expander("Logs de instalação"):
-                            st.code(out or "", language="bash")
-                            st.code(err or "", language="bash")
-
-            # Informações de uso
-            st.markdown("#### 📋 Guia Rápido")
-            st.markdown("""
-            1. **Upload do DEM** (obrigatório)
-            2. **Configure parâmetros** na sidebar
-            3. **Execute a simulação**
-            4. **Visualize resultados** e faça downloads
-            """)
-
-            # Link para documentação
-            st.markdown("#### 📚 Recursos")
-            st.markdown(
-                "[Documentação LISFLOOD](https://ec-jrc.github.io/lisflood/)")
+            if generate_report and mitigation_data:
+                report_text = _generate_mitigation_report(
+                    mitigation_data['suggestions'], float(
+                        mitigation_data.get('cell_size') or 10.0)
+                )
+                st.markdown("---")
+                st.markdown("### 📋 Relatório de Mitigação")
+                st.markdown(report_text)
+                st.download_button(
+                    "⬇️ Baixar Relatório (TXT)",
+                    report_text.encode('utf-8'),
+                    "relatorio_mitigacao.txt",
+                    "text/plain",
+                    use_container_width=True,
+                )
+                import json as _json
+                suggestions_json = _json.dumps(
+                    mitigation_data['suggestions'], indent=2, ensure_ascii=False)
+                st.download_button(
+                    "⬇️ Baixar Dados das Intervenções (JSON)",
+                    suggestions_json.encode('utf-8'),
+                    "dados_intervencoes.json",
+                    "application/json",
+                    use_container_width=True,
+                )
 
 
 if __name__ == "__main__":
