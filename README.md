@@ -67,13 +67,13 @@ Um arquivo `.vscode/extensions.json` foi incluído com estas recomendações.
 
 Implante com 1‑clique:
 
-[Deploy 1‑clique](https://share.streamlit.io/deploy?repository=leticiacaldas/App-Simulador-hidrico-de-inundacoes&branch=main&mainModule=release_streamlit_app/app_lisflood_streamlit.py)
+[Deploy 1‑clique](https://share.streamlit.io/deploy?repository=leticiacaldas/SimHidrion&branch=main&mainModule=release_streamlit_app/app_lisflood_streamlit.py)
 
 Manual:
 
 1. Acesse <https://share.streamlit.io>
 2. Conecte sua conta do GitHub
-3. Selecione o repositório `leticiacaldas/App-Simulador-hidrico-de-inundacoes`, branch `main`, e `release_streamlit_app/app_lisflood_streamlit.py` como arquivo principal
+3. Selecione o repositório `leticiacaldas/SimHidrion`, branch `main`, e `release_streamlit_app/app_lisflood_streamlit.py` como arquivo principal
 4. Configure:
    - Python: 3.11 (definido em `runtime.txt`)
    - Requirements: `requirements.txt`
