@@ -1,82 +1,88 @@
-# Simulador híbrido de inundações
+# SimHidrion – Sistema de Simulação Hidrodinâmica para Análise de Inundações
 
-Aplicativo Streamlit para simulação rápida (NumPy) e execução avançada do LISFLOOD via Docker.
+SimHidrion é um aplicativo Streamlit para simulação hidrodinâmica simplificada baseada em NumPy, com foco em agilidade, visualização e geração de produtos geoespaciais padronizados. Opcionalmente, integra-se ao LISFLOOD via Docker para cenários avançados.
+
+## Recursos principais
+
+- Simulação vetorizada em grade raster (NumPy), com chuva uniforme ou espacial por atributo de vetores
+- Hietograma CSV (tempo_min, mm_h) para chuva temporal por ciclo
+- Infiltração constante (mm/h) ou por raster GeoTIFF reamostrado ao DEM
+- Visualização com DOM/ortofoto de fundo, relevo (hillshade) e contraste ajustável
+- IA (RandomForest) para mapa de probabilidade de inundação e validação (curvas ROC/PR)
+- Exportação completa de artefatos pós-processados:
+  - GeoTIFF: lâmina d’água (`lamina_agua.tif`), mancha binária (`mancha_agua.tif`), acumulação (`acumulacao_agua.tif`), intensidade da chuva (`chuva_intensidade.tif`), excedência multibanda (`excedencia_multibanda.tif`)
+  - GeoTIFF estilizado (RGBA): água simulada com transparência sob limiar (`lamina_agua_rgba.tif`)
+  - Vetores: polígonos de inundação (`inundacao.geojson`, `inundacao.gpkg`)
+  - PNGs de overlay: DOM + água simulada, DOM + probabilidade IA
+  - CSVs: dados da simulação (`dados_simulacao.csv`), área de inundação (`area_inundacao.csv`), série temporal de ponto (`serie_ponto.csv`)
+  - ZIP do cenário: `simhidrion_relatorio_cenario.zip` agrega todos os artefatos
 
 ## Requisitos
 
-- Python 3.10+ (recomendado usar `.venv`)
-- Docker (para a aba LISFLOOD)
+- Python 3.11+
 - ffmpeg (opcional, para MP4) ou `imageio-ffmpeg`
+- Docker (opcional, somente se usar LISFLOOD)
 
-## Configuração rápida
+## Como executar (local)
 
 ```bash
-# Ativar ambiente virtual (Linux)
-source .venv/bin/activate
+# Instalar dependências
+pip install -r requirements.txt
 
-# Rodar o app
-python -m streamlit run app_lisflood_streamlit.py
+# Rodar o app principal
+streamlit run release_streamlit_app/app_lisflood_streamlit.py
+
+# Acessar no navegador
+# http://localhost:8501
 ```
 
-Acesse: <http://localhost:8501>
+Versão leve (somente NumPy, menos dependências):
 
-## Estrutura principal
+```bash
+pip install -r requirements-minimal.txt
+streamlit run app_numpy_streamlit.py
+```
 
-- `app_lisflood_streamlit.py`: app principal (NumPy + LISFLOOD)
-- `lisflood_integration.py`: utilitários de integração com LISFLOOD (Docker)
-- `design.py` e `shapes/`: estilos e cabeçalho
-- `templates/`: templates XML do LISFLOOD (opcional)
+## Estrutura
 
-## Notas
+- `release_streamlit_app/app_lisflood_streamlit.py`: app principal (SimHidrion)
+- `app_numpy_streamlit.py`: app leve (NumPy puro)
+- `lisflood_integration.py`: utilitários de integração com LISFLOOD (Docker) – opcional
+- `design.py`, `shapes/`: estilos e cabeçalho
+- `templates/`: templates XML do LISFLOOD – opcional
 
-- Dados geoespaciais grandes (GeoTIFF, shapefiles, etc.) são ignorados pelo Git via `.gitignore`.
-- A integração com Opik (telemetria) é opcional e desativa-se automaticamente se o pacote não estiver instalado.
+## Extensões recomendadas (VS Code)
+
+Para melhor experiência no desenvolvimento:
+
+- `ms-python.vscode-pylance`
+- `ms-python.python`
+- `ms-toolsai.jupyter`
+- `eamodio.gitlens`
+- `ms-ceintl.vscode-language-pack-pt-BR` (opcional)
+
+Um arquivo `.vscode/extensions.json` foi incluído com estas recomendações.
 
 ## Deploy no Streamlit Cloud
 
-Clique para implantar este app no Streamlit Cloud:
+Implante com 1‑clique:
 
-[Deploy 1‑clique no Streamlit Cloud](https://share.streamlit.io/deploy?repository=leticiacaldas/App-Simulador-hidrico-de-inundacoes&branch=main&mainModule=app_lisflood_streamlit.py)
+[Deploy 1‑clique](https://share.streamlit.io/deploy?repository=leticiacaldas/App-Simulador-hidrico-de-inundacoes&branch=main&mainModule=release_streamlit_app/app_lisflood_streamlit.py)
 
-Caso prefira fazer manualmente:
+Manual:
 
 1. Acesse <https://share.streamlit.io>
-1. Conecte sua conta do GitHub
-1. Em "New app": selecione `leticiacaldas/App-Simulador-hidrico-de-inundacoes`, branch `main`, e `app_lisflood_streamlit.py` como arquivo principal
-1. Verifique as configurações avançadas:
-   - Python: 3.11 (o arquivo `runtime.txt` já define)
-   - Requirements: será lido de `requirements.txt`
-1. Lance o app e acompanhe os logs
+2. Conecte sua conta do GitHub
+3. Selecione o repositório `leticiacaldas/App-Simulador-hidrico-de-inundacoes`, branch `main`, e `release_streamlit_app/app_lisflood_streamlit.py` como arquivo principal
+4. Configure:
+   - Python: 3.11 (definido em `runtime.txt`)
+   - Requirements: `requirements.txt`
+5. Lance o app e acompanhe os logs
 
-### Versão leve (somente NumPy)
-
-Se quiser uma versão muito mais leve (sem dependências geoespaciais), use o app `app_numpy_streamlit.py` com `requirements-minimal.txt`:
+## Publicar alterações no GitHub
 
 ```bash
-# Rodar localmente a versão leve
-python -m streamlit run app_numpy_streamlit.py
+git add .
+git commit -m "refactor: renomeia para SimHidrion e atualiza README"
+git push
 ```
-
-Deploy 1‑clique para a versão leve:
-
-[Deploy leve no Streamlit Cloud](https://share.streamlit.io/deploy?repository=leticiacaldas/App-Simulador-hidrico-de-inundacoes&branch=main&mainModule=app_numpy_streamlit.py)
-
-## Publicar no GitHub
-
-1. Inicialize o repositório e primeiro commit:
-
- ```bash
- git init
- git add .
- git commit -m "chore: projeto inicial"
- ```
-
-1. Crie um repositório vazio no GitHub e pegue a URL (por exemplo, `https://github.com/<usuario>/<repo>.git`).
-
-1. Configure o remoto e envie:
-
- ```bash
- git remote add origin <URL_DO_REPO>
- git branch -M main
- git push -u origin main
- ```

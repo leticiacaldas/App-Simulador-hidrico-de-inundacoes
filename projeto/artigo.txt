@@ -1,0 +1,219 @@
+SimHidrion: um simulador hidrodinâmico vetorizado e baseado em raster para avaliação rápida de inundação urbana com chuva espacial e hietograma
+
+Resumo
+Apresentamos o SimHidrion, um simulador de inundação urbana construído sobre um motor vetorizado em NumPy, capaz de operar inteiramente em dados raster e vetores geoespaciais para avaliação rápida de cenários de alagamento. O sistema integra perfis de chuva temporais (hietograma CSV) e chuva espacial por atributo de camadas vetoriais, infiltração constante ou por raster, visualização dinâmica em Streamlit, e pós-processamento abrangente (GeoTIFFs de altura d’água, intensidade e excedência, polígonos de inundação em GeoJSON/GeoPackage, hotspots, séries de sondagem em pontos, e um pacote ZIP do cenário). Focamos propositalmente em desativar acoplamentos com LISFLOOD durante o desenvolvimento, priorizando o modelo vetorizado por desempenho e simplicidade operacional. Em estudo de caso representativo (Bacia do Taquari, evento de 24h), demonstramos a capacidade do SimHidrion de gerar artefatos quantitativos e visuais úteis para apoio a decisão rápida, planejamento e comunicação pública.
+
+Palavras‑chave
+inundação urbana; simulação hidrológica; raster; NumPy; Streamlit; hietograma; infiltração; geoanálise; excedência
+
+1. Introdução
+Eventos extremos de precipitação têm intensificado a frequência e severidade de inundações urbanas, demandando ferramentas ágeis para previsão rápida, análise de cenários e comunicação dos riscos. Modelos fisicamente detalhados (p.ex., acoplados a hidrodinâmica 2D) oferecem alta fidelidade, mas requerem tempo de preparação e execução, além de infraestrutura computacional significativa. Em contraponto, abordagens vetorizadas e baseadas em raster podem fornecer respostas oportunas, úteis para triagem inicial, planejamento de mitigação e suporte à tomada de decisão.
+
+Este trabalho apresenta o SimHidrion, um software interativo que utiliza exclusivamente um modelo vetorizado em NumPy para simulação de inundação a partir de Modelos Digitais de Elevação (MDE/DEM), máscaras e camadas temáticas vetoriais. O sistema foi desenhado para: (i) ingestão prática de chuva temporal por hietograma CSV e chuva espacial baseada em atributos; (ii) aplicação de infiltração constante ou por raster reamostrado ao DEM; (iii) visualização e controle via Streamlit; (iv) exportação de produtos analíticos prontos (GeoTIFF, GeoJSON/GeoPackage, PNG, CSV) e pacote ZIP de cenário. Essa arquitetura privilegia a transparência, reprodutibilidade e integração com fluxos GIS comuns.
+
+2. Trabalhos Relacionados
+Ferramentas consagradas como LISFLOOD-FP, HEC-RAS 2D e TUFLOW realizam simulações hidrodinâmicas detalhadas. Entretanto, para análises rápidas, diversos trabalhos propõem simplificações baseadas em fluxo por gradiente, difusão ou preenchimento progressivo em grades raster, explorando paralelismo e operações vetorizadas. O SimHidrion posiciona-se nessa família: enfatiza rastreabilidade e velocidade, mantendo produtos geoespaciais padrão e visualizações úteis. Diferentemente de frameworks acoplados, nosso foco atual desliga telemetria e dependências externas pesadas, privilegiando um núcleo NumPy + rasterio + GeoPandas.
+
+3. Materiais e Métodos
+3.1 Dados de Entrada e Estrutura do Projeto
+O projeto organiza insumos em pastas temáticas (DEM, dom, shapes, channels, área de estudos) e templates de configuração. As principais entradas são:
+- DEM em formato raster (GeoTIFF/ASC) com `transform` e `CRS` definidos;
+- Camadas vetoriais (shapes) com atributos usados para chuva espacial;
+- Raster de infiltração opcional (GeoTIFF), reamostrado para casar com o DEM;
+- Hietograma CSV com colunas `tempo_min` e `mm_h` (perfil de intensidade temporal);
+- Parâmetros de simulação via UI Streamlit (nº de ciclos, limiar de inundação, seleção de base cartográfica, ponto de sondagem, entre outros).
+
+3.2 Núcleo do Modelo Vetorizado
+O motor utiliza arrays NumPy para representar altura d’água, gradientes e difusão simplificada. Em cada ciclo:
+- Converte a chuva do hietograma (mm/h) para aporte por ciclo e distribui espacialmente conforme o atributo selecionado na camada vetorial (modos relativo/absoluto);
+- Aplica infiltração por ciclo (constante ou raster reamostrado), com conversão consistente de unidades (mm → m por ciclo), garantindo que a infiltração não exceda a água adicionada;
+- Atualiza o campo de água por operações vetorizadas (adição, difusão/fluxo simples) e computa estatísticas;
+- Registra série temporal em um ponto de sondagem (por coordenadas X/Y, convertidas a `row/col`).
+
+3.3 Integração Geoespacial
+Usamos `rasterio` para leitura/escrita, alinhamento de `transform`/CRS e reamostragem do raster de infiltração ao grid do DEM. Vetores são manipulados com GeoPandas/Shapely; rasterização de atributos suporta chuva espacial. Visualização utiliza Matplotlib (inclui normalização por potência e paletas realçadas para contraste da água) e o app Streamlit orquestra inputs e animações. Basemaps (contextily/XYZ) oferecem contexto cartográfico.
+
+3.4 Pós‑processamento e Exportação
+Ao final, o SimHidrion produz:
+- GeoTIFF de altura d’água; mapa de intensidade; excedência multibanda (p.ex. 0.1, 0.3, 0.5, 1.0 m);
+- Polígonos de inundação (GeoJSON/GeoPackage), além de hotspots com rotulamento;
+- PNG de sobreposição/visualização; CSV de séries no ponto de sondagem;
+- Pacote ZIP do cenário contendo todos os artefatos e um `parametros.json` para rastreabilidade.
+
+3.5 Desenho de Software
+O app Streamlit centraliza a interação: seleção de insumos, parâmetros, execução de prévia e simulação completa, e downloads. Toda telemetria foi removida. A execução ocorre localmente (porta 8501), com foco em reproducibilidade e portabilidade (requirements, runtime).
+
+4. Estudo de Caso: Bacia do Taquari (Evento de 24h)
+Para demonstrar o fluxo, adotamos um hietograma representativo de 24 horas com total acumulado elevado (p.ex., 300 mm), preparado em CSV e carregado no app. A chuva espacial por atributo possibilita intensificar setores mais críticos (p.ex., por uso/ocupação, declividade ou classificação de microbacias). Infiltração foi parametrizada de forma constante e, em cenários alternativos, por raster.
+
+Resultados incluem: mapas de altura d’água e intensidade, excedência multibanda, polígonos de inundação e hotspots; além da série temporal no ponto de interesse e um pacote ZIP com todos os produtos. Observamos que o contraste visual aprimorado facilita a leitura pública e técnica, enquanto a exportação padronizada (GeoTIFF/GeoJSON/GPKG) integra‑se bem a fluxos GIS.
+
+5. Resultados
+- Desempenho: O núcleo vetorizado em NumPy executa rapidamente em grids típicos urbanos, permitindo múltiplos cenários com latência baixa para pré‑visualização e resultados completos em poucos minutos.
+- Qualidade dos artefatos: A composição de excedência por faixas de profundidade simplifica comunicação de níveis de risco; polígonos de inundação e hotspots servem para triagem e priorização; a série em ponto de sondagem auxilia validação local.
+- Portabilidade: A ausência de dependências hidrodinâmicas pesadas e a entrega via Streamlit/ZIP tornam o sistema adequado para uso por equipes de planejamento e defesa civil.
+
+6. Discussão
+Limitações: O modelo vetorizado simplifica processos (não resolve Navier–Stokes 2D), podendo sub/ superestimar dinâmica fina de escoamento, efeitos de estruturas e rugosidade. A infiltração constante é uma aproximação; a versão por raster melhora a representação, mas ainda carece de um módulo CN‑SCS ou Green–Ampt para eventos complexos. O pré‑processamento do DEM (remoção de depressões espúrias, rotas D8/D∞) pode refinar os resultados.
+
+Vantagens: Transparência, velocidade, integração GIS, e conjunto de saídas interpretáveis. O SimHidrion atua como uma solução ágil para diagnóstico e comparação de cenários preliminares, apoiando decisões antes de empregar modelos hidrodinâmicos completos.
+
+Extensões futuras: (i) módulo CN‑SCS com raster de Curve Number; (ii) preenchimento de sumidouros e roteamento D8/D∞; (iii) comparação A/B de cenários com métricas de mitigação; (iv) curvas de risco/dano por uso do solo; (v) nomenclatura de cenário propagada aos arquivos exportados.
+
+7. Conclusões
+O SimHidrion demonstra que um simulador de inundação urbano vetorizado, com integração direta a dados raster e vetoriais, pode fornecer análises rápidas e úteis para planejamento e comunicação de risco. A combinação de hietograma temporal, chuva espacial por atributo e infiltração raster/constante, aliada ao pós‑processamento rico (GeoTIFF, GeoJSON/GPKG, excedência, hotspots, séries), viabiliza um ciclo completo de configuração‑execução‑entrega. Ao priorizar desempenho, portabilidade e clareza visual, o SimHidrion complementa—não substitui—modelos hidrodinâmicos detalhados, oferecendo valor imediato em contextos onde tempo e simplicidade são cruciais.
+
+Agradecimentos
+Aos colaboradores e à comunidade GIS e Python que sustentam bibliotecas essenciais (NumPy, rasterio, GeoPandas, Matplotlib, Streamlit, SciPy, scikit‑learn) utilizadas neste projeto.
+
+Disponibilidade e Reprodutibilidade
+Código e estrutura do projeto encontram‑se na workspace, com `requirements.txt` e `runtime.txt`. O app roda via `streamlit run` em `release_streamlit_app/app_lisflood_streamlit.py`. Um CSV exemplo de hietograma (p.ex., `hyetograma_taquari_24h_300mm.csv`) está pronto para upload via UI.
+
+Referências (indicativas)
+[1] Harris et al. (2020). Array programming with NumPy. Nature.
+[2] Gillies et al. Rasterio: access to geospatial raster data.
+[3] Jordahl et al. GeoPandas: Python tools for geographic data.
+[4] Hunter (2007). Matplotlib: A 2D graphics environment. Computing in Science & Engineering.
+[5] Streamlit Inc. Streamlit Documentation.
+[6] Schumann et al. LISFLOOD‑FP: a 2D hydraulic model for flood simulation.
+
+Estrutura para o Artigo
+1. Título:
+ SimHidrion - Sistema de Simulação Hidrodinâmica para Análise de Inundações Integrando Modelagem Física e Machine Learning para Apoio à Decisão Ambiental
+Autores: Letícia Brandão Caldas, Stefan, Sandi, Miura, Denner, Breno, Henrique, Letícia …
+
+2. Resumo:
+Em maio de 2024, o estado do Rio Grande do Sul enfrentou o maior desastre climático da sua história, revelando a necessidade urgente de ferramentas mais ágeis e acessíveis para análise e mitigação de inundações. Este trabalho apresenta o Simulador Híbrido de Inundações, uma plataforma web interativa desenvolvida em Python e Streamlit que integra modelagem física e aprendizado de máquina para prever áreas suscetíveis e sugerir medidas de mitigação. O sistema combina um modelo de difusão hidrológica, baseado em diferenças finitas, com um classificador Random Forest treinado sobre dados geoespaciais. Como estudo de caso, aplicou-se o simulador a terrenos com diferentes características topográficas, incluindo um Modelo Digital de Elevação (DEM) de 50 cm e uma área terraceada. Os resultados indicaram que o método híbrido foi capaz de gerar mapas coerentes de probabilidade de inundação e relatórios automáticos de mitigação, com benefício estimado de médio a alto conforme o cenário. O simulador demonstrou potencial para apoiar gestores públicos e pesquisadores na tomada de decisão em situações de risco hidrológico, oferecendo rapidez, reprodutibilidade e acessibilidade.
+Palavras-chave: Inundações, Simulação Híbrida, Machine Learning, Modelagem Física, Mitigação, Geoprocessamento.
+Abstract
+In May 2024, the state of Rio Grande do Sul (Brazil) faced the most severe climate disaster in its history, highlighting the urgent need for faster and more accessible tools for flood risk analysis and mitigation. This work presents the Hybrid Flood Simulator, an interactive web platform developed in Python and Streamlit that integrates physical modeling and machine learning to predict flood-prone areas and suggest mitigation measures. The system combines a diffusion-based hydrological model, implemented through finite differences, with a Random Forest classifier trained on geospatial features. As a case study, the simulator was applied to terrains with distinct topographic characteristics, including a 50-cm Digital Elevation Model and a terraced agricultural area. The results showed that the hybrid approach produced coherent flood probability maps and automatic mitigation reports, with estimated benefits ranging from medium to high depending on the scenario. The simulator demonstrated strong potential as a decision-support tool for public managers and researchers, offering speed, reproducibility, and accessibility in hydrological risk management.
+Keywords: Floods, Hybrid Simulation, Machine Learning, Physical Modeling, Mitigation, Geospatial Analysis.
+
+3. Introdução:
+Em maio de 2024, o estado do Rio Grande do Sul enfrentou o maior desastre climático de sua história. Chuvas extremas e volumes excepcionais de precipitação provocaram inundações catastróficas que afetaram centenas de municípios e desalojaram mais de meio milhão de pessoas (IPH/UFRGS, 2024). O evento revelou a vulnerabilidade das infraestruturas urbanas e a necessidade de ferramentas mais ágeis para previsão e resposta a desastres hidrológicos (Defesa Civil RS, 2024).
+Os modelos hidrológicos e hidrodinâmicos tradicionais baseados em física — embora robustos — geralmente requerem calibração complexa, grandes volumes de dados e alto custo computacional (HORRITT & BATES, 2002). Tais limitações tornam seu uso menos viável em situações de emergência, onde o tempo de resposta é crítico.
+Neste contexto, abordagens baseadas em Machine Learning (ML) têm ganhado destaque por sua capacidade de modelar relações complexas entre variáveis físicas e ambientais com maior eficiência. Algoritmos como o Random Forest vêm demonstrando elevada acurácia na criação de mapas de suscetibilidade a inundações, utilizando dados de relevo, precipitação e uso do solo (MOSAVI et al., 2018; CHEN et al., 2020).
+O presente trabalho apresenta o Simulador Híbrido de Inundações, uma plataforma web interativa e de código aberto, desenvolvida com Python e Streamlit, que combina um modelo físico simplificado de escoamento superficial com algoritmos de aprendizado de máquina. O objetivo é fornecer uma ferramenta prática, leve e acessível para análise de risco, previsão de áreas suscetíveis e geração automática de relatórios de mitigação.
+4. Metodologia:
+4.1 Arquitetura do Sistema
+O Sistema de Simulação Hidrodinâmica para Análise de Inundações foi desenvolvido em Python 3.11 e implementado como aplicação web via Streamlit, permitindo acesso direto pelo navegador. Sua arquitetura é composta por quatro camadas (Figura 1):     
+
+
+
+
+
+
+   Figura 1. Interface da plataforma.
+                                    
+
+
+Interface do Usuário:
+ Desenvolvida em Streamlit, fornece uma interface intuitiva para upload de dados (DEM, shapefiles, etc.), configuração de parâmetros e visualização dos resultados.
+
+
+Processamento de Dados:
+ Utiliza as bibliotecas Rasterio e GeoPandas para manipulação geoespacial, reprojeção, reamostragem e rasterização de camadas vetoriais.
+
+
+Simulação Híbrida:
+ Núcleo computacional que combina um modelo físico baseado em difusão superficial com o modelo de aprendizado de máquina Random Forest.
+
+
+Análise e Visualização:
+ Responsável pela geração de mapas de inundação, gráficos, relatórios TXT e GeoTIFFs, além de recomendações automáticas de mitigação.
+
+
+4.2 Abordagem Híbrida de Modelagem
+A inovação central deste trabalho reside na integração entre modelagem física tradicional e técnicas de inteligência artificial, criando um framework híbrido que supera as limitações de cada abordagem isolada.
+4.2.1 Componente de Modelagem Física
+A modelagem física foi implementada de forma vetorizada para otimizar o desempenho. O modelo baseia-se na equação de difusão:
+onde:
+h representa a altura da água (m)
+D é o coeficiente de difusão (m²/s)
+Q_in e Q_out denotam fluxos de entrada e saída (m³/s)
+Exemplo de trecho do modelo implementado:
+
+
+Figura 2. Código de implementação
+4.2.2 Componente de Aprendizado de Máquina
+O modelo de IA utiliza o algoritmo Random Forest para prever a probabilidade de inundação com base em atributos derivados do terreno:
+Figura 3. Código modelo de IA
+Essas features alimentam o classificador:
+clf = RandomForestClassifier(n_estimators=150, max_depth=10)
+clf.fit(X_train, y_train)
+flood_prob = clf.predict_proba(X)[:, 1].reshape(dem.shape)
+A integração entre os módulos físico e de IA permite ao sistema aprender padrões hidrológicos e gerar previsões em tempo reduzido.
+4.2.3 Módulo de Mitigação
+O módulo de mitigação analisa o mapa de probabilidade de inundação e sugere intervenções, como florestamento e aterro seletivo:
+
+Figura 4. Código análise de mitigação 
+
+
+
+
+As sugestões são exportadas como relatórios .txt e mapas categorizados.
+4.3 Dados e Pré-processamento
+4.3.1 Dados de Entrada
+O simulador aceita os seguintes dados de entrada:
+Dados Obrigatórios:
+Modelo Digital de Elevação (DEM) em formato GeoTIFF
+Parâmetros de precipitação (intensidade, duração, distribuição espacial)
+Dados Opcionais:
+Polígonos de fontes de água (formato GPKG ou Shapefile)
+Rede hidrográfica para refinamento de simulação
+Ortofotos (DOM) para contextualização visual
+Máscaras de uso e ocupação do solo
+4.4 Produtos de Saída e Validação
+4.4.1 Saídas Quantitativas
+O simulador gera múltiplos produtos para análise:
+Dados Espaciais:
+Mapas de profundidade de inundação (GeoTIFF)
+Animações temporais (GIF/MP4)
+Mapas de probabilidade (0-1 scale)
+Máscaras de intervenção (categorizadas)
+Dados Tabulares:
+Séries temporais de área inundada
+Estatísticas de volume e vazão
+Métricas de desempenho do modelo
+Relatórios Estruturados:
+Documento TXT com análise qualitativa
+Dados JSON para integração com SIG
+Visualizações PNG para documentação
+
+5. Resultados e discussões:
+3.1 Cenário 1 – DEM 50 cm
+O simulador identificou 47 áreas de risco, com 0,06 km² destinadas a florestamento e 23.825 m³ de aterro.
+ O benefício foi alto, com predominância de vegetação em áreas planas e elevação seletiva em pontos críticos.
+
+Figura 5: Mapa de sugestões de mitigações sem o terraceamento feito no terreno.
+
+
+3.2 Cenário 2 – Área Terraceada
+Neste cenário, o simulador detectou 4 áreas críticas, com 0,04 km² de florestamento e 22.824 m³ de aterro, classificando o benefício como médio devido à presença de estruturas de drenagem natural.
+3.3 Discussão
+O modelo híbrido reduziu significativamente o tempo de simulação em comparação a métodos físicos completos.
+As previsões da IA foram coerentes com o padrão topográfico e o comportamento hidráulico esperado.
+A geração automática de relatórios permite análises rápidas e reprodutíveis.
+Limitações incluem dependência da resolução do DEM e ausência de calibração com séries históricas.
+
+
+
+6. Conclusão:
+O Simulador Híbrido de Inundações provou ser uma ferramenta prática, leve e inovadora para avaliação e mitigação de risco hidrológico.
+ Combinando modelagem física simplificada e aprendizado de máquina, o sistema oferece rapidez, acessibilidade e confiabilidade para aplicações em gestão ambiental.
+Trabalhos futuros incluem:
+Integração de dados de chuva em tempo real;
+Inclusão de novos algoritmos de IA;
+…
+
+
+
+
+7.Referências
+IPH/UFRGS (2024). Nota Técnica: Análise Preliminar do Desastre da Inundação de Abril/Maio de 2024 no Rio Grande do Sul. Instituto de Pesquisas Hidráulicas, UFRGS.
+Defesa Civil do Rio Grande do Sul (2024). Boletins Informativos sobre as Enchentes. Governo do Estado do RS.
+HORRITT, M. S.; BATES, P. D. Evaluation of 1D and 2D numerical models for predicting river flood inundation. Journal of Hydrology, 268(1–4), 87–99, 2002.
+MOSAVI, A.; OZTURK, P.; CHAU, K. W. Flood Prediction Using Machine Learning Models: A Systematic Review. Water, 10(11), 1536, 2018.
+CHEN, W. et al. GIS-based flood susceptibility mapping using a novel ensemble of classification and regression tree and random forest models. Geoscience Frontiers, 11(4), 1385–1398, 2020.
+
+

@@ -1,0 +1,12 @@
+# render.yaml para deploy automático no Render
+services:
+  - type: web
+    name: simulador-inundacoes
+    env: docker
+    plan: free
+    autoDeploy: true
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: '1'
