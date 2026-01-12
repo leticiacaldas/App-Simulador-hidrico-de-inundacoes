@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# Dados pesados (não subir)
+*.tif
+*.tiff
+*.ovr
+*.aux.xml
+*.gpkg
+*.shp
+*.shx
+*.dbf
+*.prj
+*.qmd
+*.asc
+*.tfw
+*.zip
+shapes/
+
+# Artefatos/gerados
+*.mp4
+*.gif
+# Mantenha ícones do app
+*.png
+!logos/*.png
+
+# IDE/OS
+.vscode/
+.DS_Store
+Thumbs.db
