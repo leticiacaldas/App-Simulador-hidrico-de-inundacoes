@@ -1,0 +1,39 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Start Streamlit (8502)",
+            "type": "shell",
+            "command": "/workspaces/projeto_rs/.venv/bin/python",
+            "args": [
+                "-m",
+                "streamlit",
+                "run",
+                "release_streamlit_app/app_lisflood_streamlit.py",
+                "--server.address",
+                "0.0.0.0",
+                "--server.port",
+                "8502"
+            ],
+            "isBackground": true,
+            "group": "build"
+        },
+        {
+            "label": "Stop Streamlit (8502)",
+            "type": "shell",
+            "command": "lsof -ti :8502 | xargs -r kill -9",
+            "isBackground": false,
+            "group": "none"
+        },
+        {
+            "label": "Open Streamlit in Browser",
+            "type": "shell",
+            "command": "$BROWSER",
+            "args": [
+                "http://localhost:8502"
+            ],
+            "isBackground": false,
+            "group": "none"
+        }
+    ]
+}

@@ -1739,7 +1739,8 @@ def _post_process_simulation(model, _tmp_dir, anim_path, anim_format, total_rain
                 intensity_tif = mem_i.read()
             st.session_state["dl_intensity_tif"] = intensity_tif
             st.download_button(
-                "⬇️ Mapa de intensidade da chuva (GeoTIFF)", intensity_tif, "chuva_intensidade.tif", "image/tiff"
+                "⬇️ Mapa de intensidade da chuva (GeoTIFF)", intensity_tif, "chuva_intensidade.tif", "image/tiff",
+                key="dl_intensity_now",
             )
     except Exception as _e_imap:
         st.caption(f"(Mapa de intensidade indisponível: {_e_imap})")
@@ -1839,7 +1840,9 @@ def _post_process_simulation(model, _tmp_dir, anim_path, anim_format, total_rain
                             water_tif = mem.read()
                         st.session_state['dl_water_tif'] = water_tif
                         st.download_button(
-                            "⬇️ Baixar lâmina d'água (GeoTIFF)", water_tif, "lamina_agua.tif", "image/tiff")
+                            "⬇️ Baixar lâmina d'água (GeoTIFF)", water_tif, "lamina_agua.tif", "image/tiff",
+                            key="dl_water_tif_now",
+                        )
                     except Exception as _e_wt:
                         st.caption(f"GeoTIFF lâmina indisponível: {_e_wt}")
 
@@ -1854,7 +1857,8 @@ def _post_process_simulation(model, _tmp_dir, anim_path, anim_format, total_rain
                         )
                         st.session_state['dl_water_rgba_tif'] = rgba_bytes
                         st.download_button(
-                            "⬇️ Baixar água simulada estilizada (GeoTIFF RGBA)", rgba_bytes, "lamina_agua_rgba.tif", "image/tiff"
+                            "⬇️ Baixar água simulada estilizada (GeoTIFF RGBA)", rgba_bytes, "lamina_agua_rgba.tif", "image/tiff",
+                            key="dl_water_rgba_now",
                         )
                     except Exception as _e_rgba:
                         st.caption(
@@ -1884,7 +1888,9 @@ def _post_process_simulation(model, _tmp_dir, anim_path, anim_format, total_rain
                             acc_tif = mem2.read()
                         st.session_state['dl_acc_tif'] = acc_tif
                         st.download_button(
-                            "⬇️ Baixar mapa de acumulação (GeoTIFF)", acc_tif, "acumulacao_agua.tif", "image/tiff")
+                            "⬇️ Baixar mapa de acumulação (GeoTIFF)", acc_tif, "acumulacao_agua.tif", "image/tiff",
+                            key="dl_acc_now",
+                        )
                     except Exception as _e_acc:
                         st.caption(
                             f"Mapa de acumulação indisponível: {_e_acc}")
@@ -1925,7 +1931,8 @@ def _post_process_simulation(model, _tmp_dir, anim_path, anim_format, total_rain
                                     flood_mask_tif = memm.read()
                                 st.session_state['dl_flood_mask_tif'] = flood_mask_tif
                                 st.download_button(
-                                    "⬇️ Mancha de água (GeoTIFF)", flood_mask_tif, "mancha_agua.tif", "image/tiff"
+                                    "⬇️ Mancha de água (GeoTIFF)", flood_mask_tif, "mancha_agua.tif", "image/tiff",
+                                    key="dl_flood_mask_now",
                                 )
                             except Exception as _e_mask_tif:
                                 st.caption(
@@ -1965,7 +1972,8 @@ def _post_process_simulation(model, _tmp_dir, anim_path, anim_format, total_rain
                                             'utf-8')
                                         st.session_state['dl_flood_area_csv'] = area_csv
                                         st.download_button(
-                                            "⬇️ Área de inundação (CSV)", area_csv, "area_inundacao.csv", "text/csv"
+                                            "⬇️ Área de inundação (CSV)", area_csv, "area_inundacao.csv", "text/csv",
+                                            key="dl_area_csv_now",
                                         )
                                     except Exception:
                                         pass
@@ -1978,8 +1986,11 @@ def _post_process_simulation(model, _tmp_dir, anim_path, anim_format, total_rain
                                     gj = gdf.to_json()
                                     st.session_state['dl_inund_geojson'] = gj.encode(
                                         'utf-8')
-                                    st.download_button("⬇️ Baixar polígonos de inundação (GeoJSON)", gj.encode(
-                                        'utf-8'), "inundacao.geojson", "application/geo+json")
+                                    st.download_button(
+                                        "⬇️ Baixar polígonos de inundação (GeoJSON)", gj.encode(
+                                            'utf-8'), "inundacao.geojson", "application/geo+json",
+                                        key="dl_inund_geojson_now",
+                                    )
                                     # Também exportar GeoPackage em arquivo temporário
                                     try:
                                         gpkg_path = os.path.join(
@@ -2114,6 +2125,7 @@ def _post_process_simulation(model, _tmp_dir, anim_path, anim_format, total_rain
             "simhidrion_relatorio_cenario.zip",
             "application/zip",
             use_container_width=True,
+            key="dl_zip_now",
         )
     except Exception as _e_zip:
         st.caption(f"(Falha ao montar ZIP do cenário: {_e_zip})")
@@ -2634,6 +2646,7 @@ def main():
                             file_name="prob_inundacao_ia.tif",
                             mime="image/tiff",
                             use_container_width=True,
+                            key="dl_prob_gtiff_now",
                         )
                         # Versão estilizada (RGBA) com transparência abaixo do limiar para melhor visualização em QGIS/ArcGIS
                         rgba_bytes = _probability_rgba_geotiff_bytes(
@@ -2647,6 +2660,7 @@ def main():
                             file_name="prob_inundacao_ia_rgba.tif",
                             mime="image/tiff",
                             use_container_width=True,
+                            key="dl_prob_rgba_now",
                         )
                         # PNG do overlay (DOM/DEM + probabilidade) para visualização direta
                         try:
@@ -2685,6 +2699,7 @@ def main():
                                 file_name="overlay_dom_probabilidade.png",
                                 mime="image/png",
                                 use_container_width=True,
+                                key="dl_overlay_prob_now",
                             )
                         except Exception as _e_png:
                             st.caption(
@@ -2780,6 +2795,7 @@ def main():
                         st.session_state['dl_flood_mask_tif'],
                         "mancha_agua.tif",
                         "image/tiff",
+                        key="dl_flood_mask_val",
                         use_container_width=True,
                     )
                 if st.session_state.get('dl_water_tif'):
@@ -2788,6 +2804,7 @@ def main():
                         st.session_state['dl_water_tif'],
                         "lamina_agua.tif",
                         "image/tiff",
+                        key="dl_water_tif_val",
                         use_container_width=True,
                     )
                 if st.session_state.get('dl_water_rgba_tif'):
@@ -2796,6 +2813,7 @@ def main():
                         st.session_state['dl_water_rgba_tif'],
                         "lamina_agua_rgba.tif",
                         "image/tiff",
+                        key="dl_water_rgba_val",
                         use_container_width=True,
                     )
             with cols_dl[1]:
@@ -2805,6 +2823,7 @@ def main():
                         st.session_state['dl_flood_area_csv'],
                         "area_inundacao.csv",
                         "text/csv",
+                        key="dl_area_csv_val",
                         use_container_width=True,
                     )
                 if st.session_state.get('dl_acc_tif'):
@@ -2813,6 +2832,7 @@ def main():
                         st.session_state['dl_acc_tif'],
                         "acumulacao_agua.tif",
                         "image/tiff",
+                        key="dl_acc_val",
                         use_container_width=True,
                     )
                 if st.session_state.get('dl_intensity_tif'):
@@ -2821,6 +2841,7 @@ def main():
                         st.session_state['dl_intensity_tif'],
                         "chuva_intensidade.tif",
                         "image/tiff",
+                        key="dl_intensity_val",
                         use_container_width=True,
                     )
                 if st.session_state.get('dl_exceed_tif'):
@@ -2829,6 +2850,7 @@ def main():
                         st.session_state['dl_exceed_tif'],
                         "excedencia_multibanda.tif",
                         "image/tiff",
+                        key="dl_exceed_val",
                         use_container_width=True,
                     )
             with cols_dl[2]:
@@ -2838,6 +2860,7 @@ def main():
                         st.session_state['dl_inund_geojson'],
                         "inundacao.geojson",
                         "application/geo+json",
+                        key="dl_inund_geojson_val",
                         use_container_width=True,
                     )
                 if st.session_state.get('dl_inund_gpkg'):
@@ -2846,6 +2869,7 @@ def main():
                         st.session_state['dl_inund_gpkg'],
                         "inundacao.gpkg",
                         "application/geopackage+sqlite3",
+                        key="dl_inund_gpkg_val",
                         use_container_width=True,
                     )
                 if st.session_state.get('dl_overlay_sim_png'):
@@ -2854,6 +2878,7 @@ def main():
                         st.session_state['dl_overlay_sim_png'],
                         "overlay_dom_agua_simulada.png",
                         "image/png",
+                        key="dl_overlay_sim_val",
                         use_container_width=True,
                     )
                 if st.session_state.get('dl_overlay_png'):
@@ -2862,6 +2887,7 @@ def main():
                         st.session_state['dl_overlay_png'],
                         "overlay_dom_probabilidade.png",
                         "image/png",
+                        key="dl_overlay_prob_val",
                         use_container_width=True,
                     )
 
@@ -2933,6 +2959,7 @@ def main():
                     "simhidrion_relatorio_cenario.zip",
                     "application/zip",
                     use_container_width=True,
+                    key="dl_zip_val",
                 )
             except Exception as _e_zip_val:
                 st.caption(f"(Falha ao montar ZIP na Validação: {_e_zip_val})")
@@ -3392,7 +3419,8 @@ def main():
                         with open(out_path, 'rb') as fex:
                             ex_bytes = fex.read()
                         st.download_button(
-                            "⬇️ Camadas de excedência (GeoTIFF)", ex_bytes, "excedencia_multibanda.tif", "image/tiff"
+                            "⬇️ Camadas de excedência (GeoTIFF)", ex_bytes, "excedencia_multibanda.tif", "image/tiff",
+                            key="dl_exceed_now",
                         )
                         st.session_state['dl_exceed_tif'] = ex_bytes
                 except Exception as _e_exc:
@@ -3416,7 +3444,8 @@ def main():
                             {"tempo_min": ts, "lamina_m": series})
                         csv_bytes = df_ts.to_csv(index=False).encode('utf-8')
                         st.download_button(
-                            "⬇️ Série temporal do ponto (CSV)", csv_bytes, "serie_ponto.csv", "text/csv"
+                            "⬇️ Série temporal do ponto (CSV)", csv_bytes, "serie_ponto.csv", "text/csv",
+                            key="dl_probe_series_now",
                         )
                         st.session_state['dl_probe_series_csv'] = csv_bytes
                 except Exception:
@@ -3587,6 +3616,7 @@ def main():
                         "mapa_intervencoes_mitigacao.png",
                         "image/png",
                         use_container_width=True,
+                        key="dl_mitig_png",
                     )
 
                     # Exports adicionais (GeoTIFF/GPKG)
@@ -3600,6 +3630,7 @@ def main():
                             "intervencoes_mask.tif",
                             "image/tiff",
                             use_container_width=True,
+                            key="dl_mitig_tif",
                         )
                         # Vetor (GeoPackage)
                         gpkg_bytes = _vectorize_interventions_to_gpkg_bytes(
@@ -3611,6 +3642,7 @@ def main():
                                 "intervencoes.gpkg",
                                 "application/geopackage+sqlite3",
                                 use_container_width=True,
+                                key="dl_mitig_gpkg",
                             )
                         # Land use GeoTIFF (heurístico)
                         prob_last = st.session_state.get('ia_last_prob')
@@ -3634,6 +3666,7 @@ def main():
                                 "uso_solo_heuristico.tif",
                                 "image/tiff",
                                 use_container_width=True,
+                                key="dl_landuse_tif",
                             )
                     except Exception as _e_exp:
                         st.caption(
@@ -3654,6 +3687,7 @@ def main():
                     "relatorio_mitigacao.txt",
                     "text/plain",
                     use_container_width=True,
+                    key="dl_mitig_report",
                 )
                 import json as _json
                 suggestions_json = _json.dumps(
@@ -3664,6 +3698,7 @@ def main():
                     "dados_intervencoes.json",
                     "application/json",
                     use_container_width=True,
+                    key="dl_mitig_json",
                 )
 
 
